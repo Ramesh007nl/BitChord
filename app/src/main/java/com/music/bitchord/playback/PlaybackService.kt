@@ -323,6 +323,35 @@ class PlaybackService : MediaLibraryService() {
             )
         }
 
+        override fun onSearch(
+            session: MediaLibrarySession,
+            browser: MediaSession.ControllerInfo,
+            query: String,
+            params: LibraryParams?,
+        ): ListenableFuture<LibraryResult<Void>> = scope.future {
+            androidAutoCatalog.search(query, 0, Int.MAX_VALUE).fold(
+                onSuccess = { results ->
+                    session.notifySearchResultChanged(browser, query, results.size, params)
+                    LibraryResult.ofVoid(params)
+                },
+                onFailure = { LibraryResult.ofError(SessionError.ERROR_IO) },
+            )
+        }
+
+        override fun onGetSearchResult(
+            session: MediaLibrarySession,
+            browser: MediaSession.ControllerInfo,
+            query: String,
+            page: Int,
+            pageSize: Int,
+            params: LibraryParams?,
+        ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> = scope.future {
+            androidAutoCatalog.search(query, page, pageSize).fold(
+                onSuccess = { LibraryResult.ofItemList(it, params) },
+                onFailure = { LibraryResult.ofError(SessionError.ERROR_IO) },
+            )
+        }
+
         override fun onAddMediaItems(
             mediaSession: MediaSession,
             controller: MediaSession.ControllerInfo,
@@ -331,7 +360,10 @@ class PlaybackService : MediaLibraryService() {
             mediaItems.mapNotNull { incoming ->
                 when (AndroidAutoMediaIds.parse(incoming.mediaId)) {
                     is AndroidAutoRoute.Track -> androidAutoCatalog.playableTrack(incoming).getOrNull()
-                    null -> incoming.takeIf { it.localConfiguration != null }
+                    null -> incoming.requestMetadata.searchQuery
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let { androidAutoCatalog.playableSearchResult(it).getOrNull() }
+                        ?: incoming.takeIf { it.localConfiguration != null }
                     else -> null
                 }
             }

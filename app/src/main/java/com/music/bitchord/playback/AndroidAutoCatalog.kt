@@ -126,6 +126,14 @@ class AndroidAutoCatalog(
         all.page(page, pageSize)
     }
 
+    /** Resolve a voice/Assistant search into BitChord's normal playable queue item. */
+    suspend fun playableSearchResult(query: String): Result<MediaItem> = runCatching {
+        val row = search(query, 0, 20).getOrThrow()
+            .firstOrNull { it.mediaMetadata.isPlayable == true }
+            ?: error("No playable Android Auto search result")
+        playableTrack(row).getOrThrow()
+    }
+
     fun clearAuthenticatedCache() {
         homeCache = null
         exploreCache = null
