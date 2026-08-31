@@ -33,8 +33,9 @@ import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy
 import androidx.media3.session.CommandButton
 import androidx.media3.session.DefaultMediaNotificationProvider
+import androidx.media3.session.MediaLibraryService
+import androidx.media3.session.MediaLibraryService.MediaLibrarySession
 import androidx.media3.session.MediaSession
-import androidx.media3.session.MediaSessionService
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionError
 import androidx.media3.session.SessionResult
@@ -111,9 +112,10 @@ const val ACTION_TOGGLE_SHUFFLE = "com.music.bitchord.action.TOGGLE_SHUFFLE"
  * whole life; [CrossfadeController] rides on top of it as volume automation.
  */
 @UnstableApi
-class PlaybackService : MediaSessionService() {
+class PlaybackService : MediaLibraryService() {
 
-    private var mediaSession: MediaSession? = null
+    private var mediaSession: MediaLibrarySession? = null
+    private val androidAutoCatalog by lazy { AndroidAutoCatalog(YtMusicAndroidAutoDataSource) }
 
     /**
      * The player the session is on. Swaps with [spare] at every crossfade — see
@@ -241,7 +243,7 @@ class PlaybackService : MediaSessionService() {
      */
     private val sessionSongHistory = mutableListOf<Song>()
 
-    private val sessionCallback = object : MediaSession.Callback {
+    private val sessionCallback = object : MediaLibrarySession.Callback {
         override fun onConnect(
             session: MediaSession,
             controller: MediaSession.ControllerInfo,
@@ -894,10 +896,9 @@ class PlaybackService : MediaSessionService() {
         crossfade = controller
         controller.start()
 
-        mediaSession = MediaSession.Builder(this, SessionPlayer(exoPlayer, controller))
+        mediaSession = MediaLibrarySession.Builder(this, SessionPlayer(exoPlayer, controller), sessionCallback)
             .setId(SESSION_ID)
             .setSessionActivity(sessionActivity())
-            .setCallback(sessionCallback)
             .build()
         mediaSession?.setCustomLayout(notificationButtons())
     }
@@ -3212,7 +3213,7 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
-    override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? =
+    override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? =
         mediaSession
 
     /**
