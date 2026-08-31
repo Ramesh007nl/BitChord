@@ -12,7 +12,7 @@ diff --git a/app/src/main/java/com/music/bitchord/playback/PlaybackService.kt b/
  import androidx.media3.session.SessionCommand
  import androidx.media3.session.SessionError
  import androidx.media3.session.SessionResult
-@@ -108,9 +109,10 @@ const val ACTION_TOGGLE_SHUFFLE = "com.music.bitchord.action.TOGGLE_SHUFFLE"
+@@ -108,7 +109,8 @@ const val ACTION_TOGGLE_SHUFFLE = "com.music.bitchord.action.TOGGLE_SHUFFLE"
   * A single ExoPlayer owns the queue and backs the session for the service's
   * whole life; [CrossfadeController] rides on top of it as volume automation.
   */
@@ -32,7 +32,7 @@ diff --git a/app/src/main/java/com/music/bitchord/playback/PlaybackService.kt b/
          override fun onConnect(
              session: MediaSession,
              controller: MediaSession.ControllerInfo,
-@@ -873,7 +875,7 @@ class PlaybackService : MediaSessionService() {
+@@ -873,9 +875,8 @@ class PlaybackService : MediaSessionService() {
          crossfade = controller
          controller.start()
  
@@ -43,7 +43,7 @@ diff --git a/app/src/main/java/com/music/bitchord/playback/PlaybackService.kt b/
 -            .setCallback(sessionCallback)
              .build()
          mediaSession?.setCustomLayout(notificationButtons())
-@@ -3168,7 +3170,7 @@ class PlaybackService : MediaSessionService() {
+@@ -3168,7 +3169,7 @@ class PlaybackService : MediaSessionService() {
          }
      }
  
