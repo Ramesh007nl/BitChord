@@ -43,7 +43,7 @@ diff --git a/app/src/main/java/com/music/bitchord/playback/PlaybackService.kt b/
 -            .setCallback(sessionCallback)
              .build()
          mediaSession?.setCustomLayout(notificationButtons())
-@@ -3168,7 +3169,7 @@ class PlaybackService : MediaSessionService() {
+@@ -3168,5 +3169,5 @@ class PlaybackService : MediaSessionService() {
          }
      }
  
