@@ -17,6 +17,9 @@ import com.music.bitchord.data.model.SearchResult
 import com.music.bitchord.data.model.ShelfItem
 import com.music.bitchord.data.model.Song
 import com.music.bitchord.data.model.artworkAt
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 
 /**
  * Native-media browse tree used by Android Auto and other MediaBrowser clients.
@@ -104,14 +107,17 @@ class AndroidAutoCatalog(
         val all = if (cached != null && nowMs() - cached.storedAt <= SEARCH_TTL_MS) {
             cached.value
         } else {
-            val rows = buildList {
-                for (filter in SEARCH_FILTERS) {
-                    dataSource.search(clean, filter).getOrThrow().forEach { result ->
-                        when (result) {
-                            is SearchResult.Track -> add(playableRow(result.song))
-                            is SearchResult.Browse -> add(collectionRow(result.item))
-                        }
-                    }
+            val trackResults = dataSource.search(clean, SearchFilter.SONGS).getOrThrow()
+            val browseResults = coroutineScope {
+                SEARCH_FILTERS.drop(1)
+                    .map { filter -> async { dataSource.search(clean, filter).getOrThrow() } }
+                    .awaitAll()
+                    .flatten()
+            }
+            val rows = (trackResults + browseResults).map { result ->
+                when (result) {
+                    is SearchResult.Track -> playableRow(result.song)
+                    is SearchResult.Browse -> collectionRow(result.item)
                 }
             }.distinctBy { it.mediaId }
             searchCache[cacheKey] = CacheEntry(rows, nowMs())
