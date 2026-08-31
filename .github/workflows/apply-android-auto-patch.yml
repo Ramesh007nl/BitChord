@@ -1,25 +1,25 @@
-name: Apply Android Auto Patch
+name: Apply Android Auto Service Edit
 
 on:
   push:
     branches: [feat/android-auto-full]
     paths:
-      - 'tools/android-auto-playback.patch'
+      - 'tools/apply_android_auto_service.py'
 
 permissions:
   contents: write
 
 jobs:
-  apply-patch:
+  apply-edit:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: feat/android-auto-full
           fetch-depth: 0
-      - name: Apply playback patch
-        run: git apply --check tools/android-auto-playback.patch && git apply tools/android-auto-playback.patch
-      - name: Commit patched playback service
+      - name: Apply assertion-checked playback service edit
+        run: python tools/apply_android_auto_service.py
+      - name: Commit edited playback service
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
