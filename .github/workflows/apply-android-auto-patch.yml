@@ -1,0 +1,28 @@
+name: Apply Android Auto Patch
+
+on:
+  push:
+    branches: [feat/android-auto-full]
+    paths:
+      - 'tools/android-auto-playback.patch'
+
+permissions:
+  contents: write
+
+jobs:
+  apply-patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/android-auto-full
+          fetch-depth: 0
+      - name: Apply playback patch
+        run: git apply --check tools/android-auto-playback.patch && git apply tools/android-auto-playback.patch
+      - name: Commit patched playback service
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/music/bitchord/playback/PlaybackService.kt
+          git commit -m "feat(auto): upgrade playback service session type"
+          git push origin HEAD:feat/android-auto-full
