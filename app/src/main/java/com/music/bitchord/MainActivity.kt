@@ -390,6 +390,7 @@ private fun BitChordApp(
     val filter by viewModel.filter.collectAsStateWithLifecycle()
     val signedIn by viewModel.signedIn.collectAsStateWithLifecycle()
     val account by viewModel.account.collectAsStateWithLifecycle()
+    val localMusicFolders by viewModel.localMusicFolders.collectAsStateWithLifecycle()
     val localMusicSetupSeen by AppSettings.localMusicSetupSeen.collectAsStateWithLifecycle()
     val localAllMusicEnabled by AppSettings.localAllMusicEnabled.collectAsStateWithLifecycle()
     val localMusicTreeUris by AppSettings.localMusicTreeUris.collectAsStateWithLifecycle()
@@ -1614,6 +1615,7 @@ private fun BitChordApp(
                         }
                         LocalMusicScreen(
                             songs = localSongs,
+                            folders = if (page.browseId == "local:all") localMusicFolders else null,
                             collections = downloadCollections,
                             onSongClick = play,
                             onSongLongPress = openSongMenu,

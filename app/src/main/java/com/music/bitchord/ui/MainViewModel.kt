@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.music.bitchord.auth.AuthStore
 import com.music.bitchord.data.AppUpdateChecker
 import com.music.bitchord.data.LocalMediaRepository
+import com.music.bitchord.data.local.LocalMusicFolder
 import com.music.bitchord.data.LikeState
 import com.music.bitchord.data.YtMusicRepository
 import com.music.bitchord.data.lyrics.EmbeddedLyrics
@@ -265,6 +266,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     private val _detailStack = MutableStateFlow<List<DetailPage>>(emptyList())
     val detailStack: StateFlow<List<DetailPage>> = _detailStack.asStateFlow()
+
+    /** Folder groups from the same merged A+B catalog backing local:all. */
+    private val _localMusicFolders = MutableStateFlow<List<LocalMusicFolder>>(emptyList())
+    val localMusicFolders: StateFlow<List<LocalMusicFolder>> = _localMusicFolders.asStateFlow()
 
 
     /** Set once per launch if GitHub has a release newer than this build. */
@@ -1476,16 +1481,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     if (songs.isEmpty()) UiState.Error("No downloaded tracks in Music/BitChord")
                     else UiState.Success(songs)
                 }
-                browseId == "local:all" -> {
-                    val context = getApplication<Application>()
-                    if (!LocalMediaRepository.hasStoragePermission(context)) {
-                        UiState.Error("Storage permission required to view local audio files")
-                    } else {
-                        val songs = LocalMediaRepository.getLocalMusic(context)
-                        if (songs.isEmpty()) UiState.Error("No audio files found on device")
-                        else UiState.Success(songs)
-                    }
-                }
+                browseId == "local:all" -> mergedLocalMusicState()
                 resolved == BrowseType.ARTIST -> {
                     YtMusicRepository.artistPage(browseId).fold(
                         onSuccess = { page ->
@@ -1559,6 +1555,36 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Phone Local Music is always the merged repository catalog. Broad audio
+     * permission is only one source (A); selected SAF folders (B) keep working
+     * when A is disabled or denied.
+     */
+    private suspend fun mergedLocalMusicSongs(): List<Song> {
+        val context = getApplication<Application>()
+        val catalog = LocalMediaRepository.catalog(context)
+        _localMusicFolders.value = catalog.folders
+        if (catalog.songs.isNotEmpty()) return catalog.songs
+
+        val message = when {
+            AppSettings.localAllMusicEnabled.value &&
+                !LocalMediaRepository.hasStoragePermission(context) &&
+                AppSettings.localMusicTreeUris.value.isEmpty() ->
+                "Audio permission required to view all music on this phone"
+            !AppSettings.localAllMusicEnabled.value &&
+                AppSettings.localMusicTreeUris.value.isEmpty() ->
+                "Set up Local Music in Settings"
+            else -> "No audio files found in your Local Music sources"
+        }
+        error(message)
+    }
+
+    private suspend fun mergedLocalMusicState(): UiState<List<Song>> =
+        runCatching { mergedLocalMusicSongs() }.fold(
+            onSuccess = { UiState.Success(it) },
+            onFailure = { UiState.Error(it.message ?: "Couldn't load Local Music") },
+        )
+
     fun reloadLocalDetail(browseId: String) {
         viewModelScope.launch {
             val context = getApplication<Application>()
@@ -1572,15 +1598,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     if (songs.isEmpty()) UiState.Error("No downloaded tracks in Music/BitChord")
                     else UiState.Success(songs)
                 }
-                browseId == "local:all" -> {
-                    if (!LocalMediaRepository.hasStoragePermission(context)) {
-                        UiState.Error("Storage permission required to view local audio files")
-                    } else {
-                        val songs = LocalMediaRepository.getLocalMusic(context)
-                        if (songs.isEmpty()) UiState.Error("No audio files found on device")
-                        else UiState.Success(songs)
-                    }
-                }
+                browseId == "local:all" -> mergedLocalMusicState()
                 else -> return@launch
             }
             _detailStack.value = _detailStack.value.map {
@@ -1717,13 +1735,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     LocalMediaRepository.getDownloadedSongs(context)
                         .ifEmpty { error("No downloaded tracks in Music/BitChord") }
                 }
-                browseId == "local:all" -> runCatching {
-                    if (!LocalMediaRepository.hasStoragePermission(context)) {
-                        error("Storage permission required to read local audio files")
-                    }
-                    LocalMediaRepository.getLocalMusic(context)
-                        .ifEmpty { error("No audio files found on device") }
-                }
+                browseId == "local:all" -> runCatching { mergedLocalMusicSongs() }
                 else -> YtMusicRepository.allSongs(browseId)
             }
             onResult(result.map { it.withArtwork(artworkFallback) })

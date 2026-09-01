@@ -35,6 +35,7 @@ import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.MoreHoriz
 import androidx.compose.material.icons.rounded.MusicNote
@@ -52,7 +53,6 @@ import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -67,6 +67,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
+import com.music.bitchord.data.local.LocalMusicFolder
+import com.music.bitchord.data.local.filterLocalMusicFolders
 import com.music.bitchord.data.model.ROW_ART_PX
 import com.music.bitchord.data.model.Song
 import com.music.bitchord.data.model.artworkAt
@@ -82,12 +84,13 @@ import com.music.bitchord.ui.haptics.Haptic
 import com.music.bitchord.ui.haptics.rememberHaptics
 import java.util.Locale
 
-private const val LOCAL_TAB_SONGS = 0
-private const val LOCAL_TAB_ARTISTS = 1
-private const val LOCAL_TAB_ALBUMS = 2
+private enum class LocalTabPage {
+    SONGS, FOLDERS, ALBUMS, ARTISTS,
+}
 
 /**
- * Local Music folder view with three tabs: Songs (default), Artists, Albums.
+ * Local Music view uses Songs / Folders / Albums / Artists. Downloads keeps
+ * its existing Songs / Artists / Albums tabs because it is not a source-folder browser.
  *
  * Also the Downloads folder — the two are the same thing from here, a flat list
  * of tracks on this device, and they read as the same page because they are the
@@ -102,6 +105,8 @@ private const val LOCAL_TAB_ALBUMS = 2
 @Composable
 fun LocalMusicScreen(
     songs: List<Song>,
+    /** Non-null only for Local Music; null keeps the Downloads tab set unchanged. */
+    folders: List<LocalMusicFolder>? = null,
     onSongClick: (List<Song>, Int) -> Unit,
     onSongLongPress: (Song) -> Unit,
     onSongSwipe: (Song) -> Unit,
@@ -135,15 +140,15 @@ fun LocalMusicScreen(
     collections: List<DownloadedCollection> = emptyList(),
     modifier: Modifier = Modifier,
 ) {
-    // Which top-level tab is selected.
-    var selectedTab by rememberSaveable { mutableIntStateOf(LOCAL_TAB_SONGS) }
+    // Stored by name so Local Music can have four tabs while Downloads keeps three.
+    var selectedTabName by rememberSaveable { mutableStateOf(LocalTabPage.SONGS.name) }
 
-    // Narrows whichever tab is showing — songs by title/artist/album, artists
-    // and albums by name. Not saved across process death: a filter left on a
+    // Narrows whichever tab is showing — songs by metadata, folders by leaf
+    // or path, and artists/albums by name. Not saved across process death: a filter left on a
     // folder that was never reopened is more surprising than one that reset.
     var searchQuery by rememberSaveable { mutableStateOf("") }
 
-    // When non-null, we are showing a drill-down list for that artist or album.
+    // When non-null, we are showing a drill-down list for a folder, album or artist.
     var drillDownLabel by remember { mutableStateOf<String?>(null) }
     var drillDownSongs by remember { mutableStateOf<List<Song>>(emptyList()) }
     // The release's own cover, for the drill-down header. Only a downloaded
@@ -171,6 +176,16 @@ fun LocalMusicScreen(
     // right below the bar, so it only needs to clear the bar itself.
     val barHeight = topBarHeight()
 
+    val availableTabs = if (folders == null) {
+        listOf(LocalTabPage.SONGS, LocalTabPage.ARTISTS, LocalTabPage.ALBUMS)
+    } else {
+        listOf(LocalTabPage.SONGS, LocalTabPage.FOLDERS, LocalTabPage.ALBUMS, LocalTabPage.ARTISTS)
+    }
+    val requestedTab = runCatching { LocalTabPage.valueOf(selectedTabName) }
+        .getOrDefault(LocalTabPage.SONGS)
+    val selectedTab = requestedTab.takeIf { it in availableTabs } ?: LocalTabPage.SONGS
+    val selectedTabIndex = availableTabs.indexOf(selectedTab).coerceAtLeast(0)
+
     Column(modifier = modifier.fillMaxSize()) {
         // ── Search ───────────────────────────────────────────────────────────
         // Above the tabs rather than inside each one, since a query typed on
@@ -192,48 +207,42 @@ fun LocalMusicScreen(
 
         // ── Tab row ──────────────────────────────────────────────────────────
         TabRow(
-            selectedTabIndex = selectedTab,
+            selectedTabIndex = selectedTabIndex,
             containerColor = MaterialTheme.colorScheme.background,
             contentColor = MaterialTheme.colorScheme.primary,
             indicator = { tabPositions ->
                 TabRowDefaults.SecondaryIndicator(
-                    modifier = Modifier.tabIndicatorOffset(tabPositions[selectedTab]),
+                    modifier = Modifier.tabIndicatorOffset(tabPositions[selectedTabIndex]),
                     color = MaterialTheme.colorScheme.primary,
                 )
             },
         ) {
-            LocalTab(
-                icon = Icons.Rounded.MusicNote,
-                label = "Songs",
-                selected = selectedTab == LOCAL_TAB_SONGS,
-                onClick = {
-                    selectedTab = LOCAL_TAB_SONGS
-                    leaveDrillDown()
-                },
-            )
-            LocalTab(
-                icon = Icons.Rounded.Person,
-                label = "Artists",
-                selected = selectedTab == LOCAL_TAB_ARTISTS,
-                onClick = {
-                    selectedTab = LOCAL_TAB_ARTISTS
-                    leaveDrillDown()
-                },
-            )
-            LocalTab(
-                icon = Icons.Rounded.Album,
-                label = "Albums",
-                selected = selectedTab == LOCAL_TAB_ALBUMS,
-                onClick = {
-                    selectedTab = LOCAL_TAB_ALBUMS
-                    leaveDrillDown()
-                },
-            )
+            availableTabs.forEach { tab ->
+                LocalTab(
+                    icon = when (tab) {
+                        LocalTabPage.SONGS -> Icons.Rounded.MusicNote
+                        LocalTabPage.FOLDERS -> Icons.Rounded.Folder
+                        LocalTabPage.ALBUMS -> Icons.Rounded.Album
+                        LocalTabPage.ARTISTS -> Icons.Rounded.Person
+                    },
+                    label = when (tab) {
+                        LocalTabPage.SONGS -> "Songs"
+                        LocalTabPage.FOLDERS -> "Folders"
+                        LocalTabPage.ALBUMS -> "Albums"
+                        LocalTabPage.ARTISTS -> "Artists"
+                    },
+                    selected = selectedTab == tab,
+                    onClick = {
+                        selectedTabName = tab.name
+                        leaveDrillDown()
+                    },
+                )
+            }
         }
 
         // ── Content ──────────────────────────────────────────────────────────
         AnimatedContent(
-            targetState = if (inDrillDown) "drill:$drillDownLabel" else "tab:$selectedTab",
+            targetState = if (inDrillDown) "drill:$drillDownLabel" else "tab:${selectedTab.name}",
             transitionSpec = {
                 if (targetState.startsWith("drill:")) {
                     (slideInHorizontally { it } + fadeIn()) togetherWith
@@ -278,7 +287,7 @@ fun LocalMusicScreen(
                     )
                 }
 
-                key == "tab:$LOCAL_TAB_SONGS" -> {
+                key == "tab:${LocalTabPage.SONGS.name}" -> {
                     val filteredSongs = remember(songs, searchQuery) {
                         if (searchQuery.isBlank()) songs
                         else songs.filter { it.matchesSearch(searchQuery) }
@@ -292,27 +301,23 @@ fun LocalMusicScreen(
                     )
                 }
 
-                key == "tab:$LOCAL_TAB_ARTISTS" -> {
-                    val artists = remember(songs, searchQuery) {
-                        songs.groupBy { it.artist }
-                            .entries
-                            .filter { searchQuery.isBlank() || it.key.contains(searchQuery, ignoreCase = true) }
-                            .sortedBy { it.key.lowercase(Locale.ROOT) }
+                key == "tab:${LocalTabPage.FOLDERS.name}" -> {
+                    val visibleFolders = remember(folders, searchQuery) {
+                        filterLocalMusicFolders(folders.orEmpty(), searchQuery)
                     }
-                    ArtistsTab(
-                        artists = artists,
-                        onArtistClick = { artist, artistSongs ->
-                            drillDownLabel = artist
-                            drillDownSongs = artistSongs
+                    FoldersTab(
+                        folders = visibleFolders,
+                        onFolderClick = { folder ->
+                            drillDownLabel = folder.label
+                            drillDownSongs = folder.songs
                             drillDownArt = null
                         },
-                        onArtistLongPress = onCollectionLongPress,
+                        onFolderLongPress = onCollectionLongPress,
                         contentPadding = bodyContentPadding,
                     )
                 }
 
-                else -> {
-                    // LOCAL_TAB_ALBUMS
+                key == "tab:${LocalTabPage.ALBUMS.name}" -> {
                     val albums = remember(songs, collections, searchQuery) {
                         albumEntries(songs, collections).filter {
                             searchQuery.isBlank() ||
@@ -328,6 +333,25 @@ fun LocalMusicScreen(
                             drillDownArt = entry.thumbnailUrl
                         },
                         onAlbumLongPress = onCollectionLongPress,
+                        contentPadding = bodyContentPadding,
+                    )
+                }
+
+                else -> {
+                    val artists = remember(songs, searchQuery) {
+                        songs.groupBy { it.artist }
+                            .entries
+                            .filter { searchQuery.isBlank() || it.key.contains(searchQuery, ignoreCase = true) }
+                            .sortedBy { it.key.lowercase(Locale.ROOT) }
+                    }
+                    ArtistsTab(
+                        artists = artists,
+                        onArtistClick = { artist, artistSongs ->
+                            drillDownLabel = artist
+                            drillDownSongs = artistSongs
+                            drillDownArt = null
+                        },
+                        onArtistLongPress = onCollectionLongPress,
                         contentPadding = bodyContentPadding,
                     )
                 }
@@ -373,6 +397,106 @@ private fun SongsTab(
                 )
             }
         }
+    }
+}
+
+// ── Folders tab ───────────────────────────────────────────────────────────────
+
+@Composable
+private fun FoldersTab(
+    folders: List<LocalMusicFolder>,
+    onFolderClick: (LocalMusicFolder) -> Unit,
+    onFolderLongPress: ((String, List<Song>) -> Unit)?,
+    contentPadding: PaddingValues,
+) {
+    val listState = rememberLazyListState()
+    LazyColumn(
+        state = listState,
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = contentPadding,
+    ) {
+        item {
+            SectionHeader(
+                icon = Icons.Rounded.Folder,
+                title = "${folders.size} ${if (folders.size == 1) "folder" else "folders"}",
+            )
+        }
+        if (folders.isEmpty()) {
+            item { MessageState(message = "No music folders match this search") }
+        }
+        items(folders, key = { it.key }) { folder ->
+            FolderRow(
+                folder = folder,
+                onClick = { onFolderClick(folder) },
+                onLongPress = onFolderLongPress?.let { more ->
+                    { more(folder.label, folder.songs) }
+                },
+            )
+            HorizontalDivider(
+                modifier = Modifier.padding(start = ROW_DIVIDER_INSET),
+                thickness = 0.5.dp,
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun FolderRow(
+    folder: LocalMusicFolder,
+    onClick: () -> Unit,
+    onLongPress: (() -> Unit)? = null,
+) {
+    val parent = folder.key.substringBeforeLast('/', "")
+        .takeIf { it.isNotBlank() && it != folder.label }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .combinedClickable(onClick = onClick, onLongClick = onLongPress)
+            .padding(horizontal = PAGE_GUTTER, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(48.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(MaterialTheme.colorScheme.secondaryContainer),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Folder,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.size(27.dp),
+            )
+        }
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = folder.label,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onBackground,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = buildString {
+                    if (parent != null) append("$parent · ")
+                    append("${folder.songs.size} ${if (folder.songs.size == 1) "song" else "songs"}")
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Icon(
+            imageVector = Icons.Rounded.PlayArrow,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp),
+        )
     }
 }
 
