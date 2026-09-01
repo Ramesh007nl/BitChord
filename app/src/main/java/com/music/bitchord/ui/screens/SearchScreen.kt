@@ -162,14 +162,28 @@ fun SearchScreen(
                         .map { it.song }
                     itemsIndexed(results.data) { index, row ->
                         when (row) {
-                            is SearchResult.Track -> SongRow(
-                                song = row.song,
-                                onClick = {
-                                    onSongClick(tracks, tracks.indexOf(row.song).coerceAtLeast(0))
-                                },
-                                onLongPress = { onSongLongPress(row.song) },
-                                onSwipeToQueue = { onSongSwipe(row.song) },
-                            )
+                            is SearchResult.Track -> {
+                                // Keep the real Song untouched for playback and
+                                // actions; only the search row's subtitle gains
+                                // the local-source marker.
+                                val displaySong = if (row.song.localUri != null) {
+                                    row.song.copy(
+                                        artist = listOf(row.song.artist, "On device")
+                                            .filter { it.isNotBlank() }
+                                            .joinToString(" • "),
+                                    )
+                                } else {
+                                    row.song
+                                }
+                                SongRow(
+                                    song = displaySong,
+                                    onClick = {
+                                        onSongClick(tracks, tracks.indexOf(row.song).coerceAtLeast(0))
+                                    },
+                                    onLongPress = { onSongLongPress(row.song) },
+                                    onSwipeToQueue = { onSongSwipe(row.song) },
+                                )
+                            }
                             is SearchResult.Browse -> BrowseRow(
                                 item = row.item,
                                 onClick = { onBrowseClick(row.item) },

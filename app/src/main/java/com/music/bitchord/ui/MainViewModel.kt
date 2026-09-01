@@ -60,6 +60,34 @@ import com.music.bitchord.playback.StreamChoice
 import java.util.concurrent.atomic.AtomicLong
 import java.util.Locale
 
+/**
+ * Combines the normal online result page with local-device song matches.
+ *
+ * Online rows stay first so existing search ranking is preserved. Local songs
+ * are still a useful result when the network is unavailable; only an online
+ * failure with no local matches remains a failure.
+ */
+internal fun mergeSongSearchResults(
+    online: Result<List<SearchResult>>,
+    local: List<Song>,
+): Result<List<SearchResult>> {
+    val localRows = local.map(SearchResult::Track)
+    val onlineRows = online.getOrNull()
+    if (onlineRows == null && localRows.isEmpty()) {
+        return Result.failure(
+            online.exceptionOrNull() ?: IllegalStateException("Search failed"),
+        )
+    }
+
+    val merged = (onlineRows.orEmpty() + localRows).distinctBy { result ->
+        when (result) {
+            is SearchResult.Track -> result.song.localUri ?: result.song.videoId
+            is SearchResult.Browse -> "browse:${result.item.browseId}"
+        }
+    }
+    return Result.success(merged)
+}
+
 class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val authStore = AuthStore(app)
@@ -1222,16 +1250,26 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 _results.value = cached?.let { UiState.Success(it) } ?: UiState.Loading
                 if (exact != null) return@collectLatest
 
-                // Search is YouTube's alone. A module is a *substitution*
-                // layer, not a catalogue to browse: it never has cover art,
-                // radio, related tracks or an album page, so its rows arrived
-                // in the results list looking like YouTube's and then behaved
-                // nothing like them. Every track found here takes the ordinary
-                // YouTube path and is handed to the module at playback time —
-                // see [SourceResolver.substituteForYouTube] — which upgrades
-                // the ones it holds without any of them having to be a
-                // separate row to pick between.
-                val result = YtMusicRepository.search(request.query, request.filter)
+                // Online search remains the primary catalogue. The Songs
+                // filter additionally searches the merged A+B local catalog;
+                // browse-shaped filters (albums, artists, playlists) stay
+                // online-only. A local match also gives search an offline
+                // fallback when the network request fails.
+                val online = YtMusicRepository.search(request.query, request.filter)
+                val localSongs = if (request.filter == SearchFilter.SONGS) {
+                    runCatching {
+                        LocalMediaRepository.catalog(getApplication<Application>())
+                            .search(request.query)
+                    }.getOrDefault(emptyList())
+                } else {
+                    emptyList()
+                }
+                val result = if (request.filter == SearchFilter.SONGS) {
+                    mergeSongSearchResults(online, localSongs)
+                } else {
+                    online
+                }
+
                 // A search that has been superseded shouldn't land on screen,
                 // whether it succeeded or failed.
                 if (request.requestId != newestRequestId.get()) return@collectLatest
