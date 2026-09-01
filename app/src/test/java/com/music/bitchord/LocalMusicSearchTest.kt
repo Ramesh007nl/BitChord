@@ -7,6 +7,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
+// Task 6 regression coverage for combined online + on-device search behavior.
 class LocalMusicSearchTest {
     private fun song(
         id: String,
