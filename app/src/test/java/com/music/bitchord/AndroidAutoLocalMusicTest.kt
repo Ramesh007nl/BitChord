@@ -127,31 +127,44 @@ class AndroidAutoLocalMusicTest {
     }
 
     @Test
-    fun localSongBrowseRowRestoresDeviceUriForPlayback() = runBlocking {
-        val song = localSong()
-        val local = FakeLocalDataSource(catalogWith(song))
-        val firstCatalog = AndroidAutoCatalog(FakeOnlineDataSource(), local)
-        val row = firstCatalog.children(
-            AndroidAutoRoute.LocalSection(AndroidAutoLocalSection.SONGS),
-            0,
-            100,
-        ).getOrThrow().single()
+    fun localSongBrowseRowRestoresDeviceUriForPlayback() {
+        runBlocking {
+            val song = localSong()
+            val local = FakeLocalDataSource(catalogWith(song))
+            val firstCatalog = AndroidAutoCatalog(FakeOnlineDataSource(), local)
+            val row = firstCatalog.children(
+                AndroidAutoRoute.LocalSection(AndroidAutoLocalSection.SONGS),
+                0,
+                100,
+            ).getOrThrow().single()
 
-        // Pin each boundary separately so a failure says where local identity
-        // was lost instead of only saying the final MediaItem was wrong.
-        assertEquals(song.localUri, row.mediaMetadata.extras?.getString("tantov.auto.localUri"))
-        assertEquals(song.localPath, row.mediaMetadata.extras?.getString("tantov.auto.localPath"))
+            val rowUri = row.mediaMetadata.extras?.getString("tantov.auto.localUri")
+            check(rowUri == song.localUri) {
+                "browse row lost localUri: expected=${song.localUri}, actual=$rowUri"
+            }
+            val rowPath = row.mediaMetadata.extras?.getString("tantov.auto.localPath")
+            check(rowPath == song.localPath) {
+                "browse row lost localPath: expected=${song.localPath}, actual=$rowPath"
+            }
 
-        // A fresh catalog has no remembered Song, so this proves the browse-row
-        // extras are sufficient to reconstruct a local playable item.
-        val freshCatalog = AndroidAutoCatalog(FakeOnlineDataSource(), local)
-        val playable = freshCatalog.playableTrack(row).getOrThrow()
-        val reconstructed = playable.toSong()
+            val freshCatalog = AndroidAutoCatalog(FakeOnlineDataSource(), local)
+            val playable = freshCatalog.playableTrack(row).getOrThrow()
+            val reconstructed = playable.toSong()
 
-        assertEquals(song.videoId, playable.mediaId)
-        assertEquals(song.localUri, reconstructed.localUri)
-        assertEquals(song.localPath, reconstructed.localPath)
-        assertEquals(song.localUri, playable.localConfiguration?.uri?.toString())
+            check(playable.mediaId == song.videoId) {
+                "playable mediaId changed: expected=${song.videoId}, actual=${playable.mediaId}"
+            }
+            check(reconstructed.localUri == song.localUri) {
+                "reconstructed Song lost localUri: expected=${song.localUri}, actual=${reconstructed.localUri}"
+            }
+            check(reconstructed.localPath == song.localPath) {
+                "reconstructed Song lost localPath: expected=${song.localPath}, actual=${reconstructed.localPath}"
+            }
+            val playbackUri = playable.localConfiguration?.uri?.toString()
+            check(playbackUri == song.localUri) {
+                "playback URI changed: expected=${song.localUri}, actual=$playbackUri"
+            }
+        }
     }
 
     @Test
