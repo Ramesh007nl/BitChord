@@ -128,42 +128,42 @@ class AndroidAutoLocalMusicTest {
 
     @Test
     fun localSongBrowseRowRestoresDeviceUriForPlayback() {
-        runBlocking {
-            val song = localSong()
-            val local = FakeLocalDataSource(catalogWith(song))
-            val firstCatalog = AndroidAutoCatalog(FakeOnlineDataSource(), local)
-            val row = firstCatalog.children(
+        val song = localSong()
+        val local = FakeLocalDataSource(catalogWith(song))
+        val firstCatalog = AndroidAutoCatalog(FakeOnlineDataSource(), local)
+        val row = runBlocking {
+            firstCatalog.children(
                 AndroidAutoRoute.LocalSection(AndroidAutoLocalSection.SONGS),
                 0,
                 100,
             ).getOrThrow().single()
+        }
 
-            val rowUri = row.mediaMetadata.extras?.getString("tantov.auto.localUri")
-            check(rowUri == song.localUri) {
-                "browse row lost localUri: expected=${song.localUri}, actual=$rowUri"
-            }
-            val rowPath = row.mediaMetadata.extras?.getString("tantov.auto.localPath")
-            check(rowPath == song.localPath) {
-                "browse row lost localPath: expected=${song.localPath}, actual=$rowPath"
-            }
+        val rowUri = row.mediaMetadata.extras?.getString("tantov.auto.localUri")
+        check(rowUri == song.localUri) {
+            "browse row lost localUri: expected=${song.localUri}, actual=$rowUri"
+        }
+        val rowPath = row.mediaMetadata.extras?.getString("tantov.auto.localPath")
+        check(rowPath == song.localPath) {
+            "browse row lost localPath: expected=${song.localPath}, actual=$rowPath"
+        }
 
-            val freshCatalog = AndroidAutoCatalog(FakeOnlineDataSource(), local)
-            val playable = freshCatalog.playableTrack(row).getOrThrow()
-            val reconstructed = playable.toSong()
+        val freshCatalog = AndroidAutoCatalog(FakeOnlineDataSource(), local)
+        val playable = runBlocking { freshCatalog.playableTrack(row).getOrThrow() }
+        val reconstructed = playable.toSong()
 
-            check(playable.mediaId == song.videoId) {
-                "playable mediaId changed: expected=${song.videoId}, actual=${playable.mediaId}"
-            }
-            check(reconstructed.localUri == song.localUri) {
-                "reconstructed Song lost localUri: expected=${song.localUri}, actual=${reconstructed.localUri}"
-            }
-            check(reconstructed.localPath == song.localPath) {
-                "reconstructed Song lost localPath: expected=${song.localPath}, actual=${reconstructed.localPath}"
-            }
-            val playbackUri = playable.localConfiguration?.uri?.toString()
-            check(playbackUri == song.localUri) {
-                "playback URI changed: expected=${song.localUri}, actual=$playbackUri"
-            }
+        check(playable.mediaId == song.videoId) {
+            "playable mediaId changed: expected=${song.videoId}, actual=${playable.mediaId}"
+        }
+        check(reconstructed.localUri == song.localUri) {
+            "reconstructed Song lost localUri: expected=${song.localUri}, actual=${reconstructed.localUri}"
+        }
+        check(reconstructed.localPath == song.localPath) {
+            "reconstructed Song lost localPath: expected=${song.localPath}, actual=${reconstructed.localPath}"
+        }
+        val playbackUri = playable.localConfiguration?.uri?.toString()
+        check(playbackUri == song.localUri) {
+            "playback URI changed: expected=${song.localUri}, actual=$playbackUri"
         }
     }
 
