@@ -1,0 +1,28 @@
+name: Apply Android Auto Spinner Fix
+
+on:
+  push:
+    branches: [feat/android-auto-full]
+    paths:
+      - 'tools/apply_android_auto_spinner_fix.py'
+
+permissions:
+  contents: write
+
+jobs:
+  apply-fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/android-auto-full
+          fetch-depth: 0
+      - name: Apply assertion-checked command fix
+        run: python tools/apply_android_auto_spinner_fix.py
+      - name: Commit playback service fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/music/bitchord/playback/PlaybackService.kt
+          git commit -m "fix(auto): keep MediaLibrary commands on connect"
+          git push origin HEAD:feat/android-auto-full
