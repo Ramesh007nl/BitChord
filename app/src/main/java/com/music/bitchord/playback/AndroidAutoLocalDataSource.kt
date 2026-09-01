@@ -5,7 +5,7 @@ import com.music.bitchord.data.LocalMediaRepository
 import com.music.bitchord.data.local.LocalMusicCatalog
 import com.music.bitchord.data.model.Song
 
-/** Device-local seam for Android Auto, kept injectable so car browsing stays unit-testable. */
+/** Device-local Android Auto seam, kept injectable so car browsing stays unit-testable. */
 interface AndroidAutoLocalDataSource {
     suspend fun catalog(): LocalMusicCatalog
     suspend fun search(query: String): List<Song>
