@@ -30,8 +30,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add app/src/main/java/com/music/bitchord/playback/PlaybackService.kt \
-                  app/src/main/java/com/music/bitchord/MainActivity.kt \
-                  .github/workflows/android-auto-legacy-smoke.yml
+                  app/src/main/java/com/music/bitchord/MainActivity.kt
           git diff --cached --check
           git commit -m "feat(auto): add repeat mode control"
           git push origin HEAD:feat/tantov-music-v1
