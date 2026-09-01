@@ -33,8 +33,12 @@ import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy
 import androidx.media3.session.CommandButton
 import androidx.media3.session.DefaultMediaNotificationProvider
+import androidx.media3.session.LibraryResult
+import androidx.media3.session.MediaLibraryService
+import androidx.media3.session.MediaLibraryService.LibraryParams
+import androidx.media3.session.MediaLibraryService.MediaLibrarySession
 import androidx.media3.session.MediaSession
-import androidx.media3.session.MediaSessionService
+import com.google.common.collect.ImmutableList
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionError
 import androidx.media3.session.SessionResult
@@ -77,6 +81,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.guava.future
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -111,9 +116,10 @@ const val ACTION_TOGGLE_SHUFFLE = "com.music.bitchord.action.TOGGLE_SHUFFLE"
  * whole life; [CrossfadeController] rides on top of it as volume automation.
  */
 @UnstableApi
-class PlaybackService : MediaSessionService() {
+class PlaybackService : MediaLibraryService() {
 
-    private var mediaSession: MediaSession? = null
+    private var mediaSession: MediaLibrarySession? = null
+    private val androidAutoCatalog by lazy { AndroidAutoCatalog(YtMusicAndroidAutoDataSource) }
 
     /**
      * The player the session is on. Swaps with [spare] at every crossfade — see
@@ -241,14 +247,14 @@ class PlaybackService : MediaSessionService() {
      */
     private val sessionSongHistory = mutableListOf<Song>()
 
-    private val sessionCallback = object : MediaSession.Callback {
+    private val sessionCallback = object : MediaLibrarySession.Callback {
         override fun onConnect(
             session: MediaSession,
             controller: MediaSession.ControllerInfo,
         ): MediaSession.ConnectionResult {
             // The media notification controller is a normal Media3 controller. Its custom
             // buttons are omitted unless their commands are explicitly available.
-            val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS
+            val commands = defaultBitChordLibraryCommands()
                 .buildUpon()
                 .add(favoriteCommand)
                 .add(autoplayCommand)
@@ -278,6 +284,89 @@ class PlaybackService : MediaSessionService() {
             // The actual YouTube rating is asynchronous. The command itself has been accepted;
             // the notification is refreshed when the network write completes.
             return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+        }
+
+        override fun onGetLibraryRoot(
+            session: MediaLibrarySession,
+            browser: MediaSession.ControllerInfo,
+            params: LibraryParams?,
+        ): ListenableFuture<LibraryResult<MediaItem>> = Futures.immediateFuture(
+            LibraryResult.ofItem(androidAutoCatalog.root(), params),
+        )
+
+        override fun onGetChildren(
+            session: MediaLibrarySession,
+            browser: MediaSession.ControllerInfo,
+            parentId: String,
+            page: Int,
+            pageSize: Int,
+            params: LibraryParams?,
+        ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> = scope.future {
+            val route = AndroidAutoMediaIds.parse(parentId)
+                ?: return@future LibraryResult.ofError(SessionError.ERROR_BAD_VALUE)
+            androidAutoCatalog.children(route, page, pageSize).fold(
+                onSuccess = { LibraryResult.ofItemList(it, params) },
+                onFailure = { LibraryResult.ofError(SessionError.ERROR_IO) },
+            )
+        }
+
+        override fun onGetItem(
+            session: MediaLibrarySession,
+            browser: MediaSession.ControllerInfo,
+            mediaId: String,
+        ): ListenableFuture<LibraryResult<MediaItem>> = scope.future {
+            val route = AndroidAutoMediaIds.parse(mediaId)
+                ?: return@future LibraryResult.ofError(SessionError.ERROR_BAD_VALUE)
+            androidAutoCatalog.item(route).fold(
+                onSuccess = { LibraryResult.ofItem(it, null) },
+                onFailure = { LibraryResult.ofError(SessionError.ERROR_IO) },
+            )
+        }
+
+        override fun onSearch(
+            session: MediaLibrarySession,
+            browser: MediaSession.ControllerInfo,
+            query: String,
+            params: LibraryParams?,
+        ): ListenableFuture<LibraryResult<Void>> = scope.future {
+            androidAutoCatalog.search(query, 0, Int.MAX_VALUE).fold(
+                onSuccess = { results ->
+                    session.notifySearchResultChanged(browser, query, results.size, params)
+                    LibraryResult.ofVoid(params)
+                },
+                onFailure = { LibraryResult.ofError(SessionError.ERROR_IO) },
+            )
+        }
+
+        override fun onGetSearchResult(
+            session: MediaLibrarySession,
+            browser: MediaSession.ControllerInfo,
+            query: String,
+            page: Int,
+            pageSize: Int,
+            params: LibraryParams?,
+        ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> = scope.future {
+            androidAutoCatalog.search(query, page, pageSize).fold(
+                onSuccess = { LibraryResult.ofItemList(it, params) },
+                onFailure = { LibraryResult.ofError(SessionError.ERROR_IO) },
+            )
+        }
+
+        override fun onAddMediaItems(
+            mediaSession: MediaSession,
+            controller: MediaSession.ControllerInfo,
+            mediaItems: List<MediaItem>,
+        ): ListenableFuture<List<MediaItem>> = scope.future {
+            mediaItems.mapNotNull { incoming ->
+                when (AndroidAutoMediaIds.parse(incoming.mediaId)) {
+                    is AndroidAutoRoute.Track -> androidAutoCatalog.playableTrack(incoming).getOrNull()
+                    null -> incoming.requestMetadata.searchQuery
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let { androidAutoCatalog.playableSearchResult(it).getOrNull() }
+                        ?: incoming.takeIf { it.localConfiguration != null }
+                    else -> null
+                }
+            }
         }
     }
 
@@ -894,10 +983,9 @@ class PlaybackService : MediaSessionService() {
         crossfade = controller
         controller.start()
 
-        mediaSession = MediaSession.Builder(this, SessionPlayer(exoPlayer, controller))
+        mediaSession = MediaLibrarySession.Builder(this, SessionPlayer(exoPlayer, controller), sessionCallback)
             .setId(SESSION_ID)
             .setSessionActivity(sessionActivity())
-            .setCallback(sessionCallback)
             .build()
         mediaSession?.setCustomLayout(notificationButtons())
     }
@@ -3212,7 +3300,7 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
-    override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? =
+    override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? =
         mediaSession
 
     /**
