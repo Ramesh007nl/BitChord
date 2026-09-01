@@ -254,7 +254,7 @@ class PlaybackService : MediaLibraryService() {
         ): MediaSession.ConnectionResult {
             // The media notification controller is a normal Media3 controller. Its custom
             // buttons are omitted unless their commands are explicitly available.
-            val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS
+            val commands = defaultBitChordLibraryCommands()
                 .buildUpon()
                 .add(favoriteCommand)
                 .add(autoplayCommand)
