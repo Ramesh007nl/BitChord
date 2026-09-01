@@ -7,12 +7,15 @@ import android.content.pm.PackageManager
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
+import android.provider.DocumentsContract
 import android.provider.MediaStore
 import com.music.bitchord.data.DebugLog as Log
 import androidx.core.content.ContextCompat
 import androidx.documentfile.provider.DocumentFile
 import com.music.bitchord.data.local.LocalMusicCatalog
 import com.music.bitchord.data.local.LocalMusicTrack
+import com.music.bitchord.data.local.mediaStoreStorageIdentity
+import com.music.bitchord.data.local.safStorageIdentity
 import com.music.bitchord.data.model.Song
 import com.music.bitchord.data.settings.AppSettings
 import com.music.bitchord.download.DownloadStore
@@ -150,31 +153,42 @@ object LocalMediaRepository {
 
     /**
      * Queries MediaStore for all audio files available on the device.
+     * Kept as a Song API for existing callers; the merged A+B path consumes the
+     * richer LocalMusicTrack rows from [scanMediaStore] directly.
      */
     suspend fun getLocalMusic(context: Context): List<Song> = withContext(Dispatchers.IO) {
         if (!hasStoragePermission(context)) return@withContext emptyList()
+        scanMediaStore(context).map { it.song }
+    }
 
-        val songs = mutableListOf<Song>()
-        // This scan runs over every audio file on the device, which includes
-        // whatever this app has downloaded into Music/BitChord alongside
-        // everything else — but by content URI, the only thing MediaStore
-        // offers here, that download is indistinguishable from a file the
-        // user copied on by hand. Reversing [Downloads.saved] hands a
-        // downloaded track its real YouTube id back, which is what lets
-        // PlaybackTracker recognise it as a video worth registering a play
-        // for — a content URI fails its id check on purpose, since most rows
-        // here really are just local files with nothing to sync.
+    /**
+     * MediaStore source for A (All Music). Android 10+ deliberately uses
+     * VOLUME_NAME + RELATIVE_PATH + DISPLAY_NAME instead of the deprecated DATA
+     * filesystem column. Android 9 and below retain DATA because it is the
+     * platform-supported representation there.
+     */
+    private fun scanMediaStore(context: Context): List<LocalMusicTrack> {
+        if (!hasStoragePermission(context)) return emptyList()
+
         val videoIdByUri = Downloads.saved.value.entries.associate { (id, uri) -> uri to id }
-        val projection = arrayOf(
+        val projection = mutableListOf(
             MediaStore.Audio.Media._ID,
             MediaStore.Audio.Media.TITLE,
             MediaStore.Audio.Media.ARTIST,
             MediaStore.Audio.Media.ALBUM,
             MediaStore.Audio.Media.ALBUM_ID,
             MediaStore.Audio.Media.DURATION,
-            MediaStore.Audio.Media.DATA,
-        )
+            MediaStore.MediaColumns.DISPLAY_NAME,
+        ).apply {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                add(MediaStore.MediaColumns.RELATIVE_PATH)
+                add(MediaStore.MediaColumns.VOLUME_NAME)
+            } else {
+                add(MediaStore.Audio.Media.DATA)
+            }
+        }.toTypedArray()
 
+        val rows = mutableListOf<LocalMusicTrack>()
         val selection = "${MediaStore.Audio.Media.IS_MUSIC} != 0 AND ${MediaStore.Audio.Media.DURATION} >= 5000"
         val sortOrder = "${MediaStore.Audio.Media.TITLE} ASC"
 
@@ -192,7 +206,22 @@ object LocalMediaRepository {
                 val albumCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM)
                 val albumIdCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM_ID)
                 val durationCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
-                val dataCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DATA)
+                val displayNameCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
+                val relativePathCol = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.RELATIVE_PATH)
+                } else {
+                    -1
+                }
+                val volumeNameCol = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.VOLUME_NAME)
+                } else {
+                    -1
+                }
+                val dataCol = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                    cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DATA)
+                } else {
+                    -1
+                }
 
                 val albumArtBaseUri = Uri.parse("content://media/external/audio/albumart")
 
@@ -203,17 +232,44 @@ object LocalMediaRepository {
                     val rawAlbum = cursor.getString(albumCol)
                     val albumId = cursor.getLong(albumIdCol)
                     val durationMs = cursor.getLong(durationCol)
-                    val path = cursor.getString(dataCol)
+                    val displayName = cursor.getString(displayNameCol)
+                        ?.takeIf { it.isNotBlank() }
+                        ?: "Track-$id"
+                    val relativePath = if (relativePathCol >= 0) cursor.getString(relativePathCol) else null
+                    val volumeName = if (volumeNameCol >= 0) cursor.getString(volumeNameCol) else null
+                    val legacyPath = if (dataCol >= 0) cursor.getString(dataCol) else null
 
-                    val contentUri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id).toString()
-                    val title = rawTitle.takeUnless { it.isNullOrBlank() } ?: "Track $id"
+                    val contentUri = ContentUris.withAppendedId(
+                        MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                        id,
+                    ).toString()
+                    val title = rawTitle.takeUnless { it.isNullOrBlank() } ?: displayName.substringBeforeLast('.')
                     val artist = rawArtist.takeUnless { it.isNullOrBlank() || it == "<unknown>" } ?: "Unknown Artist"
-                    val albumName = rawAlbum.takeUnless { it.isNullOrBlank() || it == "<unknown>" }
-                    val artworkUrl = if (albumId > 0) ContentUris.withAppendedId(albumArtBaseUri, albumId).toString() else null
+                    val albumName = rawAlbum.cleanTag()
+                    val artworkUrl = if (albumId > 0) {
+                        ContentUris.withAppendedId(albumArtBaseUri, albumId).toString()
+                    } else {
+                        null
+                    }
                     val durationText = formatDuration(durationMs)
 
-                    songs.add(
-                        Song(
+                    val logicalParent = when {
+                        relativePath != null -> relativePath.replace('\\', '/').trim('/')
+                        !legacyPath.isNullOrBlank() -> legacyPath.replace('\\', '/').substringBeforeLast('/', "")
+                        else -> ""
+                    }
+                    val folderKey = logicalParent.ifBlank { "On device" }
+                    val folderLabel = folderKey.substringAfterLast('/').ifBlank { "On device" }
+                    val localPath = when {
+                        relativePath != null -> {
+                            val parent = relativePath.replace('\\', '/').trim('/')
+                            if (parent.isBlank()) displayName else "$parent/$displayName"
+                        }
+                        else -> legacyPath
+                    }
+
+                    rows += LocalMusicTrack(
+                        song = Song(
                             videoId = videoIdByUri[contentUri] ?: contentUri,
                             title = title,
                             artist = artist,
@@ -221,16 +277,25 @@ object LocalMediaRepository {
                             durationText = durationText,
                             albumName = albumName,
                             localUri = contentUri,
-                            localPath = path,
-                        )
+                            localPath = localPath,
+                        ),
+                        folderKey = folderKey,
+                        folderLabel = folderLabel,
+                        identity = mediaStoreStorageIdentity(
+                            volumeName = volumeName,
+                            relativePath = relativePath,
+                            displayName = displayName,
+                            legacyPath = legacyPath,
+                            mediaId = id,
+                            durationMs = durationMs,
+                        ),
                     )
                 }
             }
         }.onFailure { Log.w(TAG, "Failed scanning device local music: ${it.message}") }
 
-        songs
+        return rows
     }
-
 
     /**
      * One catalog for both access modes. MediaStore rows are merged first so a
@@ -240,7 +305,7 @@ object LocalMediaRepository {
         val allMusicRows = if (
             AppSettings.localAllMusicEnabled.value && hasStoragePermission(context)
         ) {
-            getLocalMusic(context).map(::mediaStoreTrack)
+            scanMediaStore(context)
         } else {
             emptyList()
         }
@@ -258,20 +323,6 @@ object LocalMediaRepository {
 
     fun invalidate() {
         cachedCatalog = null
-    }
-
-    private fun mediaStoreTrack(song: Song): LocalMusicTrack {
-        val parent = song.localPath
-            ?.substringBeforeLast('/', missingDelimiterValue = "")
-            ?.takeIf { it.isNotBlank() }
-            ?: "On device"
-        val label = parent.substringAfterLast('/').ifBlank { "On device" }
-        return LocalMusicTrack(
-            song = song,
-            folderKey = parent,
-            folderLabel = label,
-            identity = identityFor(song),
-        )
     }
 
     /** Scan one persisted Storage Access Framework tree without broad file access. */
@@ -307,16 +358,26 @@ object LocalMediaRepository {
                             isAudioFileName(name)
                     ) -> {
                         val uri = child.uri.toString()
+                        val fileName = name.ifBlank { "Audio" }
                         val song = buildSongFromUri(
                             context = context,
                             uriStr = uri,
-                            fileName = name.ifBlank { "Audio" },
-                        ).copy(localPath = "$path/${name.ifBlank { "Audio" }}")
+                            fileName = fileName,
+                        ).copy(localPath = "$path/$fileName")
+                        val documentId = runCatching {
+                            DocumentsContract.getDocumentId(child.uri)
+                        }.getOrNull()
+                        val sizeBytes = runCatching { child.length() }.getOrDefault(0L)
+
                         rows += LocalMusicTrack(
                             song = song,
                             folderKey = path,
                             folderLabel = path.substringAfterLast('/').ifBlank { rootLabel },
-                            identity = identityFor(song),
+                            identity = safStorageIdentity(
+                                documentId = documentId,
+                                uri = uri,
+                                sizeBytes = sizeBytes,
+                            ),
                         )
                     }
                 }
@@ -327,18 +388,6 @@ object LocalMediaRepository {
             .onFailure { Log.w(TAG, "Failed scanning selected music tree: ${it.message}") }
         return rows
     }
-
-    /**
-     * A and B can expose the same physical file through different content URIs.
-     * Tags + duration give us a provider-independent identity without asking for
-     * filesystem-wide path access. The first occurrence wins during merge.
-     */
-    private fun identityFor(song: Song): String = listOf(
-        song.title.trim().lowercase(Locale.ROOT),
-        song.artist.trim().lowercase(Locale.ROOT),
-        song.albumName.orEmpty().trim().lowercase(Locale.ROOT),
-        song.durationText.orEmpty().trim(),
-    ).joinToString("|")
 
     private fun isAudioFileName(name: String): Boolean {
         val lower = name.lowercase(Locale.ROOT)
@@ -367,19 +416,22 @@ object LocalMediaRepository {
         var albumName: String? = null
         var durationText: String? = null
 
+        val retriever = MediaMetadataRetriever()
         runCatching {
-            val retriever = MediaMetadataRetriever()
-            retriever.setDataSource(context, Uri.parse(uriStr))
-            val metaTitle = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE)
-            val metaArtist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)
-            val metaAlbum = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM)
-            val metaDur = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
+            try {
+                retriever.setDataSource(context, Uri.parse(uriStr))
+                val metaTitle = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE)
+                val metaArtist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)
+                val metaAlbum = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM)
+                val metaDur = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
 
-            if (!metaTitle.isNullOrBlank()) title = metaTitle
-            if (!metaArtist.isNullOrBlank()) artist = metaArtist
-            albumName = metaAlbum.cleanTag()
-            if (metaDur != null && metaDur > 0) durationText = formatDuration(metaDur)
-            retriever.release()
+                if (!metaTitle.isNullOrBlank()) title = metaTitle
+                if (!metaArtist.isNullOrBlank()) artist = metaArtist
+                albumName = metaAlbum.cleanTag()
+                if (metaDur != null && metaDur > 0) durationText = formatDuration(metaDur)
+            } finally {
+                runCatching { retriever.release() }
+            }
         }
 
         return Song(
