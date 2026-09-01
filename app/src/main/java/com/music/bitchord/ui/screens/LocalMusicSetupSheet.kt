@@ -35,7 +35,7 @@ fun LocalMusicSetupSheet(
             style = MaterialTheme.typography.headlineMedium,
         )
         Text(
-            text = "TanTov Music can use Android's music library, folders you choose, or both. You can change this later in Settings.",
+            text = "TanTov Music can use Android's music library, folders you choose, or both. You can change this anytime in Settings → Local Music.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
