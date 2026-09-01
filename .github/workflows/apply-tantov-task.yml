@@ -1,0 +1,35 @@
+name: Apply TanTov Task Patch
+
+on:
+  push:
+    branches: [feat/tantov-music-v1]
+    paths:
+      - 'tools/apply_tantov_task.py'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/tantov-music-v1
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply checked patch
+        run: python tools/apply_tantov_task.py
+      - name: Commit generated changes
+        run: |
+          if git diff --quiet; then
+            echo 'No generated changes.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app .github/workflows/android-auto-legacy-smoke.yml
+          git commit -m "$(cat /tmp/tantov-commit-message)"
+          git push origin HEAD:feat/tantov-music-v1
