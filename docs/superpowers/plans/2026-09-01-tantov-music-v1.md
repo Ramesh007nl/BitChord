@@ -16,7 +16,7 @@
 - Internal Kotlin namespace remains `com.music.bitchord` for this release.
 - Preserve the existing single `MediaLibraryService`, one `MediaLibrarySession`, and one active ExoPlayer pipeline.
 - Do not request `MANAGE_EXTERNAL_STORAGE` or unrestricted all-files access.
-- A = MediaStore audio permission; B = persisted `ACTION_OPEN_DOCUMENT_TREE` / `OpenDocumentTree` grants.
+- A = MediaStore audio permission; B = persisted `OpenDocumentTree` grants.
 - A and B may be enabled simultaneously.
 - Local Music remains a separate Library destination while search mixes online + local tracks.
 - Local playback must use normal `content://` URIs and work offline.
@@ -29,31 +29,29 @@
 
 ### Existing files to extend
 
-- `app/build.gradle.kts` — TanTov application ID/label, DocumentFile dependency.
-- `app/src/dev/AndroidManifest.xml` — keep Android Auto discovery metadata; no package declaration changes needed.
+- `app/build.gradle.kts` — TanTov application ID/label and DocumentFile dependency.
 - `app/src/main/java/com/music/bitchord/data/LocalMediaRepository.kt` — MediaStore + SAF scanning, dedup, cache/index.
 - `app/src/main/java/com/music/bitchord/data/settings/AppSettings.kt` — persist setup state, A toggle, and selected tree URIs.
 - `app/src/main/java/com/music/bitchord/ui/MainViewModel.kt` — local catalog refresh and combined phone search.
 - `app/src/main/java/com/music/bitchord/MainActivity.kt` — first-run setup host, permission launchers, Local Music settings navigation.
 - `app/src/main/java/com/music/bitchord/ui/screens/SettingsSheet.kt` — add Local Music settings entry.
 - `app/src/main/java/com/music/bitchord/ui/screens/LocalMusicScreen.kt` — add Folders tab.
-- `app/src/main/java/com/music/bitchord/ui/screens/SearchScreen.kt` — mark local rows “On device”.
-- `app/src/main/java/com/music/bitchord/playback/AndroidAutoMediaIds.kt` — stable local browse routes.
+- `app/src/main/java/com/music/bitchord/ui/screens/SearchScreen.kt` — mark local rows `On device`.
+- `app/src/main/java/com/music/bitchord/playback/AndroidAutoMediaIds.kt` — stable TanTov local browse routes.
 - `app/src/main/java/com/music/bitchord/playback/AndroidAutoCatalog.kt` — local Library tree + combined search.
-- `app/src/main/java/com/music/bitchord/playback/PlaybackService.kt` — supply local source to catalog and repeat custom command/button.
-- `.github/workflows/android.yml` — keep unit/build artifact checks green.
-- `.github/workflows/android-auto-legacy-smoke.yml` — extend smoke assertion to local browse when a fake/local test source is injectable, otherwise preserve current root smoke unchanged and add JVM catalog tests.
+- `app/src/main/java/com/music/bitchord/playback/PlaybackService.kt` — local source injection and repeat custom command/button.
+- `.github/workflows/android-auto-legacy-smoke.yml` — run the real legacy MediaBrowser smoke workflow on the TanTov branch as well as the Android Auto branch.
 
 ### New focused files
 
 - `app/src/main/java/com/music/bitchord/data/local/LocalMusicModels.kt` — local track/folder/catalog value types and pure dedup helpers.
-- `app/src/main/java/com/music/bitchord/data/local/LocalMusicAccess.kt` — pure access configuration helpers shared by settings and tests.
+- `app/src/main/java/com/music/bitchord/data/local/LocalMusicAccess.kt` — pure access configuration helpers.
 - `app/src/main/java/com/music/bitchord/ui/screens/LocalMusicSetupSheet.kt` — first-run A / B / A+B / Not now UI.
 - `app/src/main/java/com/music/bitchord/ui/screens/LocalMusicSettingsScreen.kt` — manage All Music, folders, add/remove/rescan.
 - `app/src/main/java/com/music/bitchord/playback/AndroidAutoLocalDataSource.kt` — interface + production adapter around local repository.
 - `app/src/dev/res/drawable/ic_launcher_background.xml` — TanTov icon background override.
 - `app/src/dev/res/drawable/ic_launcher_foreground.xml` — TanTov icon foreground override.
-- `app/src/dev/res/drawable/ic_notification_logo.xml` — TanTov notification monochrome mark override.
+- `app/src/dev/res/drawable/ic_notification_logo.xml` — TanTov notification mark override.
 - `app/src/dev/res/mipmap-anydpi/ic_launcher.xml` — dev adaptive launcher override.
 - `app/src/dev/res/mipmap-anydpi/ic_launcher_round.xml` — dev round launcher override.
 
@@ -82,7 +80,7 @@
 
 **Interfaces:**
 - Consumes: existing `dev` flavor and main manifest launcher resource names.
-- Produces: installable TanTov build with `BuildConfig.APPLICATION_ID == "com.tantov.music"`, label `TanTov Music`, TanTov launcher resources, and Android Auto root title `TanTov Music`.
+- Produces: TanTov build with `BuildConfig.APPLICATION_ID == "com.tantov.music"`, label `TanTov Music`, TanTov launcher/notification resources, and Android Auto root title `TanTov Music`.
 
 - [ ] **Step 1: Write the failing identity test**
 
@@ -102,8 +100,6 @@ class TanTovIdentityTest {
 
 - [ ] **Step 2: Run the identity test and verify RED**
 
-Run:
-
 ```bash
 ./gradlew testDevDebugUnitTest --tests com.music.bitchord.TanTovIdentityTest
 ```
@@ -122,15 +118,15 @@ create("dev") {
 }
 ```
 
-Keep `namespace = "com.music.bitchord"` and the existing prod application ID unchanged.
+Keep `namespace = "com.music.bitchord"` and the prod application ID unchanged.
 
-Change the Android Auto catalog root label:
+Change the Android Auto root label:
 
 ```kotlin
 fun root(): MediaItem = browsable(AndroidAutoRoute.Root, "TanTov Music")
 ```
 
-- [ ] **Step 4: Add dev-only adaptive icon resources**
+- [ ] **Step 4: Add dev-only launcher resources**
 
 `app/src/dev/res/drawable/ic_launcher_background.xml`:
 
@@ -154,19 +150,32 @@ fun root(): MediaItem = browsable(AndroidAutoRoute.Root, "TanTov Music")
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <path
-        android:fillColor="#FFFFFFFF"
+    <path android:fillColor="#FFFFFFFF"
         android:pathData="M22,30 L50,30 L50,38 L40,38 L40,76 L32,76 L32,38 L22,38 Z" />
-    <path
-        android:fillColor="#FFFFFFFF"
+    <path android:fillColor="#FFFFFFFF"
         android:pathData="M54,30 L82,30 L82,38 L72,38 L72,58 L64,58 L64,38 L54,38 Z" />
-    <path
-        android:fillColor="#FFE9D5FF"
+    <path android:fillColor="#FFE9D5FF"
         android:pathData="M69,49 L76,47 L76,69 C76,75 72,79 66,79 C61,79 58,76 58,72 C58,68 62,65 67,65 C68,65 69,65 69,66 Z" />
 </vector>
 ```
 
-`app/src/dev/res/mipmap-anydpi/ic_launcher.xml` and `ic_launcher_round.xml`:
+`app/src/dev/res/drawable/ic_notification_logo.xml`:
+
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path android:fillColor="#FFFFFFFF"
+        android:pathData="M2,4 H10 V6 H7 V20 H5 V6 H2 Z" />
+    <path android:fillColor="#FFFFFFFF"
+        android:pathData="M11,4 H21 V6 H18 V12.5 L16,13.1 V6 H11 Z M16,12 V17 C16,19 14.6,20 12.7,20 C11.1,20 10,19.1 10,17.8 C10,16.4 11.3,15.4 13,15.4 C13.4,15.4 13.8,15.5 14,15.6 V12.6 Z" />
+</vector>
+```
+
+Both `app/src/dev/res/mipmap-anydpi/ic_launcher.xml` and `ic_launcher_round.xml`:
 
 ```xml
 <?xml version="1.0" encoding="utf-8"?>
@@ -177,15 +186,13 @@ fun root(): MediaItem = browsable(AndroidAutoRoute.Root, "TanTov Music")
 </adaptive-icon>
 ```
 
-Create a matching white-on-transparent vector in `app/src/dev/res/drawable/ic_notification_logo.xml` using the same TT/music-note silhouette so the media notification no longer carries the old BitChord mark.
-
-- [ ] **Step 5: Run identity test and build**
+- [ ] **Step 5: Run the identity test and build**
 
 ```bash
 ./gradlew testDevDebugUnitTest --tests com.music.bitchord.TanTovIdentityTest assembleDevDebug
 ```
 
-Expected: PASS; APK builds as package `com.tantov.music`.
+Expected: PASS and dev APK builds.
 
 - [ ] **Step 6: Commit**
 
@@ -206,7 +213,7 @@ git commit -m "feat(tantov): establish app identity"
 **Interfaces:**
 - Produces: `LocalMusicAccessConfig(setupSeen, allMusicEnabled, treeUris)` and AppSettings flows/setters used by repository/UI.
 
-- [ ] **Step 1: Write pure failing access-state tests**
+- [ ] **Step 1: Write failing access-state tests**
 
 ```kotlin
 package com.music.bitchord
@@ -231,8 +238,7 @@ class LocalMusicAccessTest {
 
     @Test
     fun removingFolderDoesNotDisableAllMusic() {
-        val config = LocalMusicAccessConfig(true, true, setOf("one", "two"))
-            .removeTree("one")
+        val config = LocalMusicAccessConfig(true, true, setOf("one", "two")).removeTree("one")
         assertTrue(config.allMusicEnabled)
         assertEquals(setOf("two"), config.treeUris)
     }
@@ -272,9 +278,7 @@ data class LocalMusicAccessConfig(
 }
 ```
 
-- [ ] **Step 4: Add AppSettings flows and persistence**
-
-Add flows:
+- [ ] **Step 4: Add AppSettings flows, reads and setters**
 
 ```kotlin
 val localMusicSetupSeen = MutableStateFlow(false)
@@ -282,7 +286,7 @@ val localAllMusicEnabled = MutableStateFlow(false)
 val localMusicTreeUris = MutableStateFlow<Set<String>>(emptySet())
 ```
 
-Read keys in `readAll()`:
+In `readAll()`:
 
 ```kotlin
 localMusicSetupSeen.value = prefs.getBoolean("local_music_setup_seen", false)
@@ -290,7 +294,7 @@ localAllMusicEnabled.value = prefs.getBoolean("local_all_music_enabled", false)
 localMusicTreeUris.value = prefs.getStringSet("local_music_tree_uris", emptySet()).orEmpty().toSet()
 ```
 
-Add setters:
+Setters:
 
 ```kotlin
 fun setLocalMusicSetupSeen(value: Boolean) {
@@ -342,12 +346,8 @@ git commit -m "feat(local): persist music access choices"
 - Test: `app/src/test/java/com/music/bitchord/LocalMusicCatalogTest.kt`
 
 **Interfaces:**
-- Produces:
-  - `LocalMusicTrack(song: Song, folderKey: String, folderLabel: String, identity: String)`
-  - `LocalMusicCatalog(tracks: List<LocalMusicTrack>)`
-  - `LocalMediaRepository.refresh(context): LocalMusicCatalog`
-  - `LocalMediaRepository.catalog(context): LocalMusicCatalog`
-  - `LocalMediaRepository.invalidate()`
+- Produces `LocalMusicTrack`, `LocalMusicFolder`, `LocalMusicCatalog`.
+- Produces `LocalMediaRepository.refresh(context)`, `catalog(context)`, and `invalidate()`.
 
 - [ ] **Step 1: Add DocumentFile dependency**
 
@@ -355,7 +355,7 @@ git commit -m "feat(local): persist music access choices"
 implementation("androidx.documentfile:documentfile:1.0.1")
 ```
 
-- [ ] **Step 2: Write RED tests for dedup and folder grouping**
+- [ ] **Step 2: Write RED tests for dedup/folders**
 
 ```kotlin
 package com.music.bitchord
@@ -384,7 +384,7 @@ class LocalMusicCatalogTest {
     }
 
     @Test
-    fun foldersRemainDistinctByPathEvenWhenLeafNameMatches() {
+    fun equalLeafFolderNamesRemainDistinctByPath() {
         val catalog = LocalMusicCatalog.merge(
             mediaStore = listOf(
                 track("1", "primary:Music/Tamil/a.mp3", "Music/Tamil"),
@@ -405,12 +405,13 @@ class LocalMusicCatalogTest {
 
 Expected: FAIL because local catalog models do not exist.
 
-- [ ] **Step 4: Implement pure catalog models**
+- [ ] **Step 4: Add catalog models**
 
 ```kotlin
 package com.music.bitchord.data.local
 
 import com.music.bitchord.data.model.Song
+import java.util.Locale
 
 data class LocalMusicTrack(
     val song: Song,
@@ -427,10 +428,11 @@ data class LocalMusicFolder(
 
 data class LocalMusicCatalog(val tracks: List<LocalMusicTrack>) {
     val songs: List<Song> get() = tracks.map { it.song }
+
     val folders: List<LocalMusicFolder> get() = tracks
         .groupBy { it.folderKey }
         .map { (key, rows) -> LocalMusicFolder(key, rows.first().folderLabel, rows.map { it.song }) }
-        .sortedBy { it.label.lowercase() }
+        .sortedBy { it.label.lowercase(Locale.ROOT) }
 
     fun search(query: String): List<Song> {
         val q = query.trim()
@@ -452,22 +454,21 @@ data class LocalMusicCatalog(val tracks: List<LocalMusicTrack>) {
 }
 ```
 
-- [ ] **Step 5: Refactor MediaStore scanning into track rows**
+- [ ] **Step 5: Refactor MediaStore scan to produce `LocalMusicTrack`**
 
-Keep `getDownloadedSongs()` behavior untouched. Change the all-device path to collect MediaStore fields including `DISPLAY_NAME`, `RELATIVE_PATH` on API 29+, and volume information where available. Build an identity from storage volume + relative path + file name; on older Android use `DATA`.
-
-Representative mapping:
+For API 29+, include `DISPLAY_NAME`, `RELATIVE_PATH`, and `VOLUME_NAME`; for older Android retain `DATA`. Build the track with this exact fallback order:
 
 ```kotlin
-val folder = relativePath?.trimEnd('/') ?: path?.substringBeforeLast('/').orEmpty()
+val folder = relativePath?.trimEnd('/')
+    ?: path?.substringBeforeLast('/').orEmpty()
 val identity = when {
     !relativePath.isNullOrBlank() -> "$volumeName:${relativePath.trim('/')}/$displayName"
     !path.isNullOrBlank() -> path
     else -> "media:$id:$durationMs:$displayName"
 }
-LocalMusicTrack(
+val row = LocalMusicTrack(
     song = Song(
-        videoId = contentUri,
+        videoId = videoIdByUri[contentUri] ?: contentUri,
         title = title,
         artist = artist,
         thumbnailUrl = artworkUrl,
@@ -482,17 +483,46 @@ LocalMusicTrack(
 )
 ```
 
-- [ ] **Step 6: Add recursive SAF tree scanning**
+- [ ] **Step 6: Add recursive SAF tree scan**
 
-For each URI in `AppSettings.localMusicTreeUris.value`:
+Imports:
 
 ```kotlin
-val root = DocumentFile.fromTreeUri(context, Uri.parse(treeUri)) ?: return emptyList()
+import android.provider.DocumentsContract
+import androidx.documentfile.provider.DocumentFile
 ```
 
-Recursively walk directories. Accept a file when `type?.startsWith("audio/") == true` or the existing `isAudioFileName(name)` returns true. Use `MediaMetadataRetriever.setDataSource(context, file.uri)` to read title/artist/album/duration. Store the playable `file.uri.toString()` in `Song.localUri` and a readable synthetic folder path in `Song.localPath`.
+For each stored tree URI:
 
-Derive a stable identity from `DocumentsContract.getDocumentId(file.uri)` when available:
+```kotlin
+private fun scanTree(context: Context, treeUri: String): List<LocalMusicTrack> {
+    val rootUri = Uri.parse(treeUri)
+    val root = DocumentFile.fromTreeUri(context, rootUri) ?: return emptyList()
+    val rootLabel = root.name ?: "Selected folder"
+    val out = mutableListOf<LocalMusicTrack>()
+
+    fun walk(folder: DocumentFile, path: String) {
+        folder.listFiles().forEach { child ->
+            when {
+                child.isDirectory -> walk(child, "$path/${child.name ?: "Folder"}")
+                child.isFile && (
+                    child.type?.startsWith("audio/") == true ||
+                        isAudioFileName(child.name.orEmpty())
+                ) -> out += buildTrackFromDocument(context, child, path)
+            }
+        }
+    }
+
+    return runCatching {
+        walk(root, rootLabel)
+        out
+    }.getOrElse { error ->
+        if (error is SecurityException) emptyList() else throw error
+    }
+}
+```
+
+`buildTrackFromDocument` must read title/artist/album/duration with `MediaMetadataRetriever`, set `Song.localUri = file.uri.toString()`, set `Song.localPath = "$path/${file.name}"`, and use this identity:
 
 ```kotlin
 val identity = runCatching { DocumentsContract.getDocumentId(file.uri) }
@@ -500,8 +530,6 @@ val identity = runCatching { DocumentsContract.getDocumentId(file.uri) }
     ?.takeIf { it.isNotBlank() }
     ?: "saf:${file.uri}:${file.length()}:$durationMs"
 ```
-
-Catch `SecurityException` per tree; a revoked tree contributes no rows and must not fail the rest of the catalog.
 
 - [ ] **Step 7: Add cache/refresh API**
 
@@ -511,22 +539,25 @@ Catch `SecurityException` per tree; a revoked tree contributes no rows and must 
 suspend fun refresh(context: Context): LocalMusicCatalog = withContext(Dispatchers.IO) {
     val media = if (AppSettings.localAllMusicEnabled.value && hasStoragePermission(context)) {
         scanMediaStore(context)
-    } else emptyList()
-    val trees = scanGrantedTrees(context, AppSettings.localMusicTreeUris.value)
+    } else {
+        emptyList()
+    }
+    val trees = AppSettings.localMusicTreeUris.value.flatMap { scanTree(context, it) }
     LocalMusicCatalog.merge(media, trees).also { cachedCatalog = it }
 }
 
-suspend fun catalog(context: Context): LocalMusicCatalog =
-    cachedCatalog ?: refresh(context)
+suspend fun catalog(context: Context): LocalMusicCatalog = cachedCatalog ?: refresh(context)
 
 fun invalidate() {
     cachedCatalog = null
 }
+
+suspend fun getLocalMusic(context: Context): List<Song> = catalog(context).songs
 ```
 
-Keep `getLocalMusic(context)` as a compatibility delegate to `catalog(context).songs` while call sites are migrated.
+Keep `getDownloadedSongs()` unchanged.
 
-- [ ] **Step 8: Run tests and build**
+- [ ] **Step 8: Run tests/build**
 
 ```bash
 ./gradlew testDevDebugUnitTest --tests com.music.bitchord.LocalMusicCatalogTest assembleDevDebug
@@ -543,7 +574,7 @@ git commit -m "feat(local): merge MediaStore and folder music"
 
 ---
 
-### Task 4: First-run A / B / A+B setup and Local Music settings
+### Task 4: First-run setup and Local Music settings
 
 **Files:**
 - Create: `app/src/main/java/com/music/bitchord/ui/screens/LocalMusicSetupSheet.kt`
@@ -553,23 +584,24 @@ git commit -m "feat(local): merge MediaStore and folder music"
 - Modify: `app/src/main/java/com/music/bitchord/ui/MainViewModel.kt`
 
 **Interfaces:**
-- Consumes: AppSettings access flows, `LocalMediaRepository.invalidate/refresh`.
-- Produces: skippable first-run setup and Settings management of A+B grants.
+- Consumes AppSettings access flows and `LocalMediaRepository.invalidate/refresh`.
+- Produces skippable first-run A/B/A+B setup and later folder management.
 
-- [ ] **Step 1: Add shared permission/folder callbacks in MainActivity**
-
-Use the existing audio permission launcher and add a tree launcher:
+- [ ] **Step 1: Add a persistent tree picker in `BitChordApp`**
 
 ```kotlin
 val folderPicker = rememberLauncherForActivityResult(
     ActivityResultContracts.OpenDocumentTree(),
 ) { uri ->
     if (uri != null) {
-        runCatching {
+        val persisted = runCatching {
             context.contentResolver.takePersistableUriPermission(
                 uri,
                 Intent.FLAG_GRANT_READ_URI_PERMISSION,
             )
+            true
+        }.getOrDefault(false)
+        if (persisted) {
             AppSettings.addLocalMusicTreeUri(uri.toString())
             LocalMediaRepository.invalidate()
             viewModel.reloadLocalDetail("local:all")
@@ -578,11 +610,21 @@ val folderPicker = rememberLauncherForActivityResult(
 }
 ```
 
-When removing a folder, call `releasePersistableUriPermission` inside `runCatching`, remove it from AppSettings even if release reports it was already revoked, invalidate, and refresh.
+When removing a folder:
 
-- [ ] **Step 2: Implement first-run setup sheet**
+```kotlin
+runCatching {
+    context.contentResolver.releasePersistableUriPermission(
+        Uri.parse(treeUri),
+        Intent.FLAG_GRANT_READ_URI_PERMISSION,
+    )
+}
+AppSettings.removeLocalMusicTreeUri(treeUri)
+LocalMediaRepository.invalidate()
+viewModel.reloadLocalDetail("local:all")
+```
 
-Expose four actions exactly:
+- [ ] **Step 2: Create first-run setup sheet**
 
 ```kotlin
 @Composable
@@ -594,41 +636,28 @@ fun LocalMusicSetupSheet(
 )
 ```
 
-Copy:
+Render four actions with exact labels:
 - `All Music on this phone`
 - `Choose music folders`
 - `Use both`
 - `Not now`
 
-The sheet must not block dismissal forever; every path sets `localMusicSetupSeen = true` before or after launching the relevant system UI.
+Every action calls `AppSettings.setLocalMusicSetupSeen(true)`. `All Music` sets `localAllMusicEnabled = true` and launches the existing audio permission request. `Choose music folders` launches `folderPicker`. `Use both` sets A true, requests audio permission, and leaves the folder picker action immediately available after the permission result. `Not now` grants nothing.
 
-For `Use both`, set `localAllMusicEnabled = true`, request audio permission, and then allow the folder picker. Permission denial leaves B usable.
-
-- [ ] **Step 3: Show setup only on first launch**
-
-In `BitChordApp`:
+- [ ] **Step 3: Gate the sheet on first launch**
 
 ```kotlin
 val localSetupSeen by AppSettings.localMusicSetupSeen.collectAsStateWithLifecycle()
 var showLocalSetup by rememberSaveable { mutableStateOf(!localSetupSeen) }
+
+LaunchedEffect(localSetupSeen) {
+    if (localSetupSeen) showLocalSetup = false
+}
 ```
 
-Once any setup choice is made:
+- [ ] **Step 4: Add Settings -> Local Music**
 
-```kotlin
-AppSettings.setLocalMusicSetupSeen(true)
-showLocalSetup = false
-```
-
-- [ ] **Step 4: Add Settings -> Local Music row and dedicated screen**
-
-Extend `SettingsScreen` with:
-
-```kotlin
-onLocalMusic: () -> Unit
-```
-
-Add a Storage/Music settings row:
+Add `onLocalMusic: () -> Unit` to `SettingsScreen` and this row:
 
 ```kotlin
 SettingsRow(
@@ -639,22 +668,20 @@ SettingsRow(
 )
 ```
 
-`LocalMusicSettingsScreen` must show:
-- All Music toggle and current permission state.
-- selected persisted folder names/URIs.
-- `Add folder`.
-- remove action for each folder.
-- `Rescan music`.
+Create `LocalMusicSettingsScreen` with:
+- switch for A (`AppSettings.localAllMusicEnabled`), requesting audio permission when turned on without permission;
+- current tree URIs, displaying `DocumentFile.fromTreeUri(context, Uri.parse(uri))?.name ?: uri`;
+- `Add folder` -> `folderPicker.launch(null)`;
+- remove button -> release grant + remove setting + invalidate;
+- `Rescan music` -> coroutine calls `LocalMediaRepository.refresh(context)` and displays `${catalog.songs.size} songs`.
 
-`Rescan music` calls `LocalMediaRepository.refresh(context)` from a coroutine and updates the visible song count.
-
-- [ ] **Step 5: Build UI**
+- [ ] **Step 5: Compile the complete setup/settings flow**
 
 ```bash
 ./gradlew assembleDevDebug
 ```
 
-Expected: compile succeeds with no new manifest all-files permission.
+Expected: PASS.
 
 - [ ] **Step 6: Commit**
 
@@ -665,7 +692,7 @@ git commit -m "feat(local): add first-run and settings access flow"
 
 ---
 
-### Task 5: Add Folders to the phone Local Music library
+### Task 5: Add Folders to phone Local Music
 
 **Files:**
 - Modify: `app/src/main/java/com/music/bitchord/ui/MainViewModel.kt`
@@ -673,14 +700,14 @@ git commit -m "feat(local): add first-run and settings access flow"
 - Test: `app/src/test/java/com/music/bitchord/LocalMusicCatalogTest.kt`
 
 **Interfaces:**
-- Consumes: `LocalMusicCatalog.folders`.
-- Produces: `Local Music -> Songs / Folders / Artists / Albums` on phone.
+- Consumes `LocalMusicCatalog`.
+- Produces phone `Local Music -> Songs / Folders / Artists / Albums`.
 
-- [ ] **Step 1: Add a folder-order regression test**
+- [ ] **Step 1: Add alphabetical folder test**
 
 ```kotlin
 @Test
-fun folderListIsStableAndAlphabetical() {
+fun folderListIsAlphabetical() {
     val catalog = LocalMusicCatalog.merge(
         mediaStore = listOf(
             track("2", "two", "Music/Zed"),
@@ -692,15 +719,17 @@ fun folderListIsStableAndAlphabetical() {
 }
 ```
 
-- [ ] **Step 2: Run RED if sorting/grouping is not yet correct**
+- [ ] **Step 2: Run test**
 
 ```bash
 ./gradlew testDevDebugUnitTest --tests com.music.bitchord.LocalMusicCatalogTest
 ```
 
-- [ ] **Step 3: Load local detail from the merged catalog**
+Expected: PASS once Task 3 sorting is present; if it fails, fix catalog ordering before touching UI.
 
-Replace the existing `local:all` calls that directly call `getLocalMusic(context)` with:
+- [ ] **Step 3: Migrate `local:all` ViewModel reads**
+
+Use the merged catalog rather than treating missing MediaStore permission as fatal:
 
 ```kotlin
 val catalog = LocalMediaRepository.catalog(context)
@@ -708,11 +737,9 @@ if (catalog.songs.isEmpty()) UiState.Error("No audio files found on device")
 else UiState.Success(catalog.songs)
 ```
 
-Permission denial should only block A. If B has at least one readable folder, Local Music must still load.
+Do not return `Storage permission required` when A is unavailable if a selected B folder still provides songs.
 
 - [ ] **Step 4: Add the Folders tab**
-
-In `LocalMusicScreen.kt`:
 
 ```kotlin
 private const val LOCAL_TAB_SONGS = 0
@@ -721,7 +748,21 @@ private const val LOCAL_TAB_ARTISTS = 2
 private const val LOCAL_TAB_ALBUMS = 3
 ```
 
-Add a `Folder` tab using `Icons.Rounded.Folder`. Group songs using their readable `localPath` parent, with the full parent path as the key and leaf directory as the label. Tapping a folder reuses the existing drill-down song list.
+Add:
+
+```kotlin
+LocalTab(
+    icon = Icons.Rounded.Folder,
+    label = "Folders",
+    selected = selectedTab == LOCAL_TAB_FOLDERS,
+    onClick = {
+        selectedTab = LOCAL_TAB_FOLDERS
+        leaveDrillDown()
+    },
+)
+```
+
+Build folder groups from each `Song.localPath?.substringBeforeLast('/')`; use the full parent as the key and `substringAfterLast('/')` as the label. Tapping a folder sets `drillDownLabel` and `drillDownSongs`, reusing `DrillDownSongList`.
 
 - [ ] **Step 5: Run tests/build**
 
@@ -740,7 +781,7 @@ git commit -m "feat(local): browse music by folder"
 
 ---
 
-### Task 6: Combine phone search with local “On device” results and offline fallback
+### Task 6: Combine phone search with local results and offline fallback
 
 **Files:**
 - Modify: `app/src/main/java/com/music/bitchord/ui/MainViewModel.kt`
@@ -748,41 +789,40 @@ git commit -m "feat(local): browse music by folder"
 - Test: `app/src/test/java/com/music/bitchord/LocalMusicSearchTest.kt`
 
 **Interfaces:**
-- Produces: Songs-tab results containing online tracks plus local tracks; local results remain available when online search fails.
+- Produces Songs-tab search with online + local tracks and `On device` labels.
 
-- [ ] **Step 1: Add pure merge helper + RED tests**
-
-Create an internal helper in `MainViewModel.kt` or a small adjacent testable file:
+- [ ] **Step 1: Write RED merge tests**
 
 ```kotlin
-internal fun mergeSongSearchResults(
-    online: Result<List<SearchResult>>,
-    local: List<Song>,
-): Result<List<SearchResult>>
-```
+package com.music.bitchord
 
-Tests:
+import com.music.bitchord.data.model.SearchResult
+import com.music.bitchord.data.model.Song
+import com.music.bitchord.ui.mergeSongSearchResults
+import org.junit.Assert.assertEquals
+import org.junit.Test
 
-```kotlin
-@Test
-fun localSongsAreIncludedWithOnlineSongs() {
-    val onlineSong = Song("yt", "Yellow", "Coldplay")
-    val localSong = Song("local", "Yellow Live", "Coldplay", localUri = "content://local")
-    val merged = mergeSongSearchResults(
-        Result.success(listOf(SearchResult.Track(onlineSong))),
-        listOf(localSong),
-    ).getOrThrow()
-    assertEquals(2, merged.size)
-}
+class LocalMusicSearchTest {
+    @Test
+    fun localSongsAreIncludedAfterOnlineSongs() {
+        val onlineSong = Song("yt", "Yellow", "Coldplay")
+        val localSong = Song("local", "Yellow Live", "Coldplay", localUri = "content://local")
+        val merged = mergeSongSearchResults(
+            Result.success(listOf(SearchResult.Track(onlineSong))),
+            listOf(localSong),
+        ).getOrThrow()
+        assertEquals(2, merged.size)
+    }
 
-@Test
-fun onlineFailureStillReturnsLocalSongs() {
-    val localSong = Song("local", "Local Track", "Artist", localUri = "content://local")
-    val merged = mergeSongSearchResults(
-        Result.failure(IllegalStateException("offline")),
-        listOf(localSong),
-    ).getOrThrow()
-    assertEquals(listOf("Local Track"), merged.map { (it as SearchResult.Track).song.title })
+    @Test
+    fun onlineFailureStillReturnsLocalSongs() {
+        val localSong = Song("local", "Local Track", "Artist", localUri = "content://local")
+        val merged = mergeSongSearchResults(
+            Result.failure(IllegalStateException("offline")),
+            listOf(localSong),
+        ).getOrThrow()
+        assertEquals("Local Track", (merged.single() as SearchResult.Track).song.title)
+    }
 }
 ```
 
@@ -792,9 +832,29 @@ fun onlineFailureStillReturnsLocalSongs() {
 ./gradlew testDevDebugUnitTest --tests com.music.bitchord.LocalMusicSearchTest
 ```
 
-- [ ] **Step 3: Merge local results only into the Songs filter**
+Expected: FAIL because `mergeSongSearchResults` does not exist.
 
-Inside the search collector:
+- [ ] **Step 3: Implement merge helper**
+
+```kotlin
+internal fun mergeSongSearchResults(
+    online: Result<List<SearchResult>>,
+    local: List<Song>,
+): Result<List<SearchResult>> {
+    val localRows = local.map(SearchResult::Track)
+    val onlineRows = online.getOrNull()
+    if (onlineRows == null && localRows.isEmpty()) return Result.failure(online.exceptionOrNull()!!)
+    val merged = (onlineRows.orEmpty() + localRows).distinctBy { result ->
+        when (result) {
+            is SearchResult.Track -> result.song.localUri ?: result.song.videoId
+            is SearchResult.Browse -> "browse:${result.item.browseId}"
+        }
+    }
+    return Result.success(merged)
+}
+```
+
+- [ ] **Step 4: Use it only for Songs filter**
 
 ```kotlin
 val online = YtMusicRepository.search(request.query, request.filter)
@@ -810,11 +870,9 @@ val result = if (request.filter == SearchFilter.SONGS) {
 }
 ```
 
-Deduplicate by playable identity (`localUri ?: videoId`) while preserving online ordering, then local ordering.
+- [ ] **Step 5: Mark local SearchScreen rows**
 
-- [ ] **Step 4: Mark local rows in SearchScreen**
-
-When rendering `SearchResult.Track`, use:
+When rendering `SearchResult.Track`:
 
 ```kotlin
 val subtitle = if (song.localUri != null) {
@@ -824,7 +882,7 @@ val subtitle = if (song.localUri != null) {
 }
 ```
 
-- [ ] **Step 5: Run search tests/build**
+- [ ] **Step 6: Run tests/build**
 
 ```bash
 ./gradlew testDevDebugUnitTest --tests com.music.bitchord.LocalMusicSearchTest assembleDevDebug
@@ -832,7 +890,7 @@ val subtitle = if (song.localUri != null) {
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add app/src/main/java/com/music/bitchord/ui/MainViewModel.kt app/src/main/java/com/music/bitchord/ui/screens/SearchScreen.kt app/src/test/java/com/music/bitchord/LocalMusicSearchTest.kt
@@ -841,7 +899,7 @@ git commit -m "feat(search): combine online and local music"
 
 ---
 
-### Task 7: Extend Android Auto with Local Music browse + combined search
+### Task 7: Extend Android Auto with Local Music browse/search
 
 **Files:**
 - Create: `app/src/main/java/com/music/bitchord/playback/AndroidAutoLocalDataSource.kt`
@@ -849,15 +907,12 @@ git commit -m "feat(search): combine online and local music"
 - Modify: `app/src/main/java/com/music/bitchord/playback/AndroidAutoCatalog.kt`
 - Modify: `app/src/main/java/com/music/bitchord/playback/PlaybackService.kt`
 - Test: `app/src/test/java/com/music/bitchord/AndroidAutoLocalMusicTest.kt`
-- Test: existing Android Auto catalog/search tests as required by signature changes.
+- Modify existing Android Auto ID/catalog/search tests for the new TanTov ID prefix where assertions depend on it.
 
 **Interfaces:**
-- Produces:
-  - Android Auto `Library -> Local Music -> Songs / Folders / Albums / Artists`.
-  - combined Auto search with local fallback.
-  - local browse rows that resolve back to normal playable `Song.toMediaItem()` content URIs.
+- Produces Android Auto `Library -> Local Music -> Songs / Folders / Albums / Artists` and combined local/online search.
 
-- [ ] **Step 1: Define injectable local data source**
+- [ ] **Step 1: Add injectable local data source**
 
 ```kotlin
 interface AndroidAutoLocalDataSource {
@@ -865,17 +920,30 @@ interface AndroidAutoLocalDataSource {
     suspend fun search(query: String): List<Song>
 }
 
-class DeviceAndroidAutoLocalDataSource(
-    private val context: Context,
-) : AndroidAutoLocalDataSource {
+object EmptyAndroidAutoLocalDataSource : AndroidAutoLocalDataSource {
+    override suspend fun catalog() = LocalMusicCatalog(emptyList())
+    override suspend fun search(query: String) = emptyList<Song>()
+}
+
+class DeviceAndroidAutoLocalDataSource(private val context: Context) : AndroidAutoLocalDataSource {
     override suspend fun catalog() = LocalMediaRepository.catalog(context)
     override suspend fun search(query: String) = catalog().search(query)
 }
 ```
 
-- [ ] **Step 2: Write RED browse/search tests**
+Change catalog constructor without breaking old tests:
 
-Use a fake local data source with two songs and one folder. Assertions:
+```kotlin
+class AndroidAutoCatalog(
+    private val dataSource: AndroidAutoDataSource,
+    private val localDataSource: AndroidAutoLocalDataSource = EmptyAndroidAutoLocalDataSource,
+    private val nowMs: () -> Long = System::currentTimeMillis,
+)
+```
+
+- [ ] **Step 2: Write RED local browse/search tests**
+
+Use a fake local source and assert:
 
 ```kotlin
 @Test
@@ -885,7 +953,7 @@ fun libraryContainsSeparateLocalMusicFolder() = runTest {
 }
 
 @Test
-fun localMusicHasSongsFoldersAlbumsArtists() = runTest {
+fun localMusicHasFourSections() = runTest {
     val rows = catalog.children(AndroidAutoRoute.LocalMusic, 0, 100).getOrThrow()
     assertEquals(
         listOf("Songs", "Folders", "Albums", "Artists"),
@@ -894,16 +962,14 @@ fun localMusicHasSongsFoldersAlbumsArtists() = runTest {
 }
 
 @Test
-fun offlineOnlineSearchStillReturnsLocalTrack() = runTest {
+fun onlineFailureStillReturnsLocalAutoSearch() = runTest {
     online.failSearch = true
     val rows = catalog.search("local", 0, 20).getOrThrow()
     assertTrue(rows.any { it.mediaMetadata.description?.contains("On device") == true })
 }
 ```
 
-- [ ] **Step 3: Add stable local routes**
-
-Extend `AndroidAutoRoute`:
+- [ ] **Step 3: Add TanTov local media routes**
 
 ```kotlin
 data object LocalMusic : AndroidAutoRoute
@@ -912,61 +978,84 @@ data class LocalCollection(
     val kind: AndroidAutoLocalCollectionKind,
     val key: String,
 ) : AndroidAutoRoute
-```
 
-Enums:
-
-```kotlin
 enum class AndroidAutoLocalSection { SONGS, FOLDERS, ALBUMS, ARTISTS }
 enum class AndroidAutoLocalCollectionKind { FOLDER, ALBUM, ARTIST }
 ```
 
-Encode dynamic collection keys with the existing URL-safe Base64 helper. Because `com.tantov.music` is a new package, update the media ID prefix from `bitchord:auto:v1` to `tantov:auto:v1` in the same task and update ID tests accordingly.
+Change media ID prefix to:
 
-- [ ] **Step 4: Make Library local-aware even when signed out**
+```kotlin
+private const val PREFIX = "tantov:auto:v1"
+```
 
-Refactor the existing `Library` route so Local Music is independent of YouTube sign-in:
+Use existing URL-safe Base64 helpers for local collection keys.
+
+- [ ] **Step 4: Make Library local-aware without YouTube sign-in**
+
+Route:
 
 ```kotlin
 AndroidAutoRoute.Library -> libraryFolders()
 ```
 
-`libraryFolders()` first checks the local catalog and adds:
+Folder builder:
 
 ```kotlin
-if (localDataSource.catalog().songs.isNotEmpty()) {
-    add(browsable(AndroidAutoRoute.LocalMusic, "Local Music"))
+private suspend fun libraryFolders(): List<MediaItem> = buildList {
+    val local = localDataSource.catalog()
+    if (local.songs.isNotEmpty()) {
+        add(browsable(AndroidAutoRoute.LocalMusic, "Local Music"))
+    }
+    if (!dataSource.isSignedIn()) return@buildList
+    val page = library()
+    if (page.likedSongs.isNotEmpty()) {
+        add(browsable(AndroidAutoRoute.LibrarySection(AndroidAutoLibrarySection.LIKED), "Liked Songs"))
+    }
+    if (page.librarySongs.isNotEmpty()) {
+        add(browsable(AndroidAutoRoute.LibrarySection(AndroidAutoLibrarySection.SONGS), "Songs"))
+    }
+    LIBRARY_SHELVES.forEach { (section, title) ->
+        if (page.shelves.firstOrNull { it.title.equals(title, true) }?.items?.isNotEmpty() == true) {
+            add(browsable(AndroidAutoRoute.LibrarySection(section), title))
+        }
+    }
 }
 ```
 
-Then append signed-in online sections exactly as before.
+- [ ] **Step 5: Implement four local browse sections**
 
-- [ ] **Step 5: Implement Local Music children**
+`LocalMusic` returns four `LocalSection` rows. `SONGS` returns `catalog.songs.map(::playableRow)`. `FOLDERS` maps `catalog.folders` to `LocalCollection(FOLDER, folder.key)`. `ALBUMS` groups nonblank `song.albumName`; `ARTISTS` groups nonblank `song.artist`. A `LocalCollection` route returns the group’s songs.
 
-`LocalMusic` returns four browse folders. `SONGS` returns playable rows. `FOLDERS`, `ALBUMS`, and `ARTISTS` return browse collections, and each local collection returns its matching songs.
-
-For local playable rows, continue storing the full `Song` in `rememberedSongs`. Add local URI/path to MediaMetadata extras so a reconstructed row can still resolve:
+Add extras to playable rows:
 
 ```kotlin
 putString(EXTRA_LOCAL_URI, song.localUri)
 putString(EXTRA_LOCAL_PATH, song.localPath)
 ```
 
-Update `songFromBrowseRow` to restore both fields.
-
-- [ ] **Step 6: Merge Android Auto search with local rows**
-
-Run online and local search independently. If online fails but local rows exist, return local rows. If both fail/empty and online failed, return the online failure.
-
-Mark local metadata:
+Restore them in `songFromBrowseRow`:
 
 ```kotlin
-if (song.localUri != null) {
-    setDescription(listOf(song.artist, "On device").filter { it.isNotBlank() }.joinToString(" • "))
-}
+localUri = extras?.getString(EXTRA_LOCAL_URI),
+localPath = extras?.getString(EXTRA_LOCAL_PATH),
 ```
 
-- [ ] **Step 7: Inject production local data source from PlaybackService**
+- [ ] **Step 6: Merge Android Auto search with local fallback**
+
+Implement online and local parts independently. Produce `localRows = localDataSource.search(clean).map(::playableRow)`. If online search fails and `localRows` is nonempty, return local rows; if both have results, append local rows after online rows and deduplicate by media ID; if online fails and local rows are empty, propagate online failure.
+
+For a local playable row, description must be:
+
+```kotlin
+setDescription(
+    listOf(song.artist, "On device")
+        .filter { it.isNotBlank() }
+        .joinToString(" • "),
+)
+```
+
+- [ ] **Step 7: Inject device local source**
 
 ```kotlin
 private val androidAutoCatalog by lazy {
@@ -983,7 +1072,7 @@ private val androidAutoCatalog by lazy {
 ./gradlew testDevDebugUnitTest --tests 'com.music.bitchord.AndroidAuto*'
 ```
 
-Expected: all Android Auto tests PASS.
+Expected: PASS.
 
 - [ ] **Step 9: Commit**
 
@@ -994,20 +1083,46 @@ git commit -m "feat(auto): browse and search local music"
 
 ---
 
-### Task 8: Expose repeat off/all/one to Android Auto and run release verification
+### Task 8: Add Android Auto repeat control and complete verification
 
 **Files:**
 - Modify: `app/src/main/java/com/music/bitchord/playback/PlaybackService.kt`
+- Modify: `app/src/main/java/com/music/bitchord/MainActivity.kt`
+- Modify: `.github/workflows/android-auto-legacy-smoke.yml`
 - Test: `app/src/test/java/com/music/bitchord/AndroidAutoRepeatCommandTest.kt`
-- Verify: `.github/workflows/android.yml`
-- Verify: `.github/workflows/android-auto-legacy-smoke.yml`
 
 **Interfaces:**
-- Produces: a custom session command that cycles the same player repeat mode already used by the phone UI: OFF -> ALL -> ONE -> OFF.
+- Produces repeat cycle OFF -> ALL -> ONE -> OFF through the same player state on phone and Android Auto.
 
-- [ ] **Step 1: Write a pure repeat-cycle test**
+- [ ] **Step 1: Write RED repeat-cycle test**
 
-Extract a helper:
+```kotlin
+package com.music.bitchord
+
+import androidx.media3.common.Player
+import com.music.bitchord.playback.nextRepeatMode
+import org.junit.Assert.assertEquals
+import org.junit.Test
+
+class AndroidAutoRepeatCommandTest {
+    @Test
+    fun repeatCyclesOffAllOneOff() {
+        assertEquals(Player.REPEAT_MODE_ALL, nextRepeatMode(Player.REPEAT_MODE_OFF))
+        assertEquals(Player.REPEAT_MODE_ONE, nextRepeatMode(Player.REPEAT_MODE_ALL))
+        assertEquals(Player.REPEAT_MODE_OFF, nextRepeatMode(Player.REPEAT_MODE_ONE))
+    }
+}
+```
+
+- [ ] **Step 2: Run RED**
+
+```bash
+./gradlew testDevDebugUnitTest --tests com.music.bitchord.AndroidAutoRepeatCommandTest
+```
+
+Expected: FAIL because `nextRepeatMode` does not exist.
+
+- [ ] **Step 3: Add shared repeat helper and custom command**
 
 ```kotlin
 internal fun nextRepeatMode(current: Int): Int = when (current) {
@@ -1015,35 +1130,17 @@ internal fun nextRepeatMode(current: Int): Int = when (current) {
     Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE
     else -> Player.REPEAT_MODE_OFF
 }
-```
 
-Test:
-
-```kotlin
-@Test
-fun repeatCyclesOffAllOneOff() {
-    assertEquals(Player.REPEAT_MODE_ALL, nextRepeatMode(Player.REPEAT_MODE_OFF))
-    assertEquals(Player.REPEAT_MODE_ONE, nextRepeatMode(Player.REPEAT_MODE_ALL))
-    assertEquals(Player.REPEAT_MODE_OFF, nextRepeatMode(Player.REPEAT_MODE_ONE))
-}
-```
-
-- [ ] **Step 2: Run RED before adding helper**
-
-```bash
-./gradlew testDevDebugUnitTest --tests com.music.bitchord.AndroidAutoRepeatCommandTest
-```
-
-Expected: FAIL because helper is missing.
-
-- [ ] **Step 3: Add repeat session command**
-
-```kotlin
 const val ACTION_CYCLE_REPEAT = "com.tantov.music.action.CYCLE_REPEAT"
+```
+
+In service fields:
+
+```kotlin
 private val repeatCommand = SessionCommand(ACTION_CYCLE_REPEAT, Bundle.EMPTY)
 ```
 
-Add it to `onConnect()` available session commands.
+Add `repeatCommand` to `onConnect()` session commands.
 
 In `onCustomCommand()`:
 
@@ -1054,9 +1151,7 @@ ACTION_CYCLE_REPEAT -> {
 }
 ```
 
-- [ ] **Step 4: Put repeat in the custom layout**
-
-Build the button from the current player mode using Media3’s built-in repeat icons:
+- [ ] **Step 4: Add repeat button to custom layout**
 
 ```kotlin
 val repeat = CommandButton.Builder(
@@ -1077,9 +1172,37 @@ val repeat = CommandButton.Builder(
     .build()
 ```
 
-Include it in `notificationButtons()` without removing the standard player repeat command. The phone player continues to use the same `repeatMode`; replace its inline cycle `when` in `MainActivity.kt` with `nextRepeatMode(it.repeatMode)` so phone and car cannot diverge.
+Include `repeat` in `notificationButtons()` and refresh layout from `onRepeatModeChanged`:
 
-- [ ] **Step 5: Run repeat + complete unit suite**
+```kotlin
+mediaSession?.setCustomLayout(notificationButtons())
+```
+
+Replace the phone player’s inline repeat `when` with:
+
+```kotlin
+it.repeatMode = nextRepeatMode(it.repeatMode)
+```
+
+- [ ] **Step 5: Make legacy smoke workflow run on TanTov branch**
+
+Change:
+
+```yaml
+on:
+  push:
+    branches: [feat/android-auto-full, feat/tantov-music-v1]
+  pull_request:
+    branches: [main]
+```
+
+Keep the emulator script exactly:
+
+```yaml
+script: ./gradlew connectedDevDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.music.bitchord.AndroidAutoLegacyBrowserTest
+```
+
+- [ ] **Step 6: Run full JVM verification**
 
 ```bash
 ./gradlew testDevDebugUnitTest
@@ -1087,41 +1210,37 @@ Include it in `notificationButtons()` without removing the standard player repea
 
 Expected: PASS with zero failing tests.
 
-- [ ] **Step 6: Build the TanTov APK**
+- [ ] **Step 7: Build TanTov APK**
 
 ```bash
 ./gradlew assembleDevDebug
 ```
 
-Expected: `app/build/outputs/apk/dev/debug/app-dev-debug.apk` exists and uses application ID `com.tantov.music`.
+Expected: `app/build/outputs/apk/dev/debug/app-dev-debug.apk` exists.
 
-- [ ] **Step 7: Run legacy MediaBrowser smoke test**
-
-Run the existing instrumentation workflow/command used by `.github/workflows/android-auto-legacy-smoke.yml` against this commit. Expected root connection succeeds and the existing root children still load; then manually/with catalog tests verify `Library -> Local Music`.
-
-- [ ] **Step 8: Inspect merged manifest for forbidden permission**
+- [ ] **Step 8: Verify merged manifest has no all-files permission**
 
 ```bash
 ./gradlew processDevDebugMainManifest
+! grep -R "MANAGE_EXTERNAL_STORAGE" app/build/intermediates/merged_manifests/devDebug
 ```
 
-Inspect the merged manifest and verify it contains `READ_MEDIA_AUDIO` / legacy `READ_EXTERNAL_STORAGE` as appropriate to existing app declarations, and does **not** contain `MANAGE_EXTERNAL_STORAGE`.
+Expected: command exits successfully because `MANAGE_EXTERNAL_STORAGE` is absent.
 
-- [ ] **Step 9: Produce fresh CI artifact**
-
-Push the task branch and require GitHub Actions `Android CI` to finish success with:
-- Unit tests success
-- Dev APK build success
-- artifact upload success
-
-Do not claim real-car validation until the user installs the fresh TanTov APK and verifies it in the car.
-
-- [ ] **Step 10: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
-git add app/src/main/java/com/music/bitchord/playback/PlaybackService.kt app/src/main/java/com/music/bitchord/MainActivity.kt app/src/test/java/com/music/bitchord/AndroidAutoRepeatCommandTest.kt
+git add app/src/main/java/com/music/bitchord/playback/PlaybackService.kt app/src/main/java/com/music/bitchord/MainActivity.kt app/src/test/java/com/music/bitchord/AndroidAutoRepeatCommandTest.kt .github/workflows/android-auto-legacy-smoke.yml
 git commit -m "feat(auto): add repeat mode control"
 ```
+
+- [ ] **Step 10: Push and verify both GitHub Actions workflows**
+
+Require:
+- `Android CI`: Unit tests = success, Build BitChord Dev APK = success, Upload artifact = success.
+- `Android Auto Legacy Browser Smoke`: emulator instrumentation job = success.
+
+Download the fresh `bitchord-dev-debug` artifact, rename the extracted APK to `TanTov-Music-Android-Auto-v1.apk`, compute SHA-256, and give it to the user for phone/car validation. Do not claim real-car validation until the user confirms it.
 
 ---
 
@@ -1129,7 +1248,7 @@ git commit -m "feat(auto): add repeat mode control"
 
 - [ ] `BuildConfig.APPLICATION_ID == "com.tantov.music"`.
 - [ ] Phone launcher label is `TanTov Music`.
-- [ ] Android Auto launcher uses the TanTov icon/name.
+- [ ] Android Auto launcher uses TanTov name/icon.
 - [ ] Original BitChord package can remain installed separately.
 - [ ] First launch offers All Music / Choose music folders / Use both / Not now.
 - [ ] A and B can stay enabled together.
@@ -1145,7 +1264,7 @@ git commit -m "feat(auto): add repeat mode control"
 - [ ] Android Auto local rows play through the existing MediaLibrarySession/ExoPlayer.
 - [ ] Android Auto search merges local results and keeps local fallback offline.
 - [ ] Repeat cycles OFF -> ALL -> ONE -> OFF from phone and car through the same player state.
-- [ ] Existing Android Auto legacy-browser smoke test still succeeds.
+- [ ] Existing Android Auto legacy-browser smoke test succeeds.
 - [ ] `testDevDebugUnitTest` succeeds.
 - [ ] `assembleDevDebug` succeeds.
-- [ ] Fresh GitHub Actions artifact is produced for real-car testing.
+- [ ] Fresh GitHub Actions APK artifact is produced for real-car testing.
