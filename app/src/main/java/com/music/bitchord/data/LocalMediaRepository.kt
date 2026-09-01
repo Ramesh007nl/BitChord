@@ -10,7 +10,11 @@ import android.os.Build
 import android.provider.MediaStore
 import com.music.bitchord.data.DebugLog as Log
 import androidx.core.content.ContextCompat
+import androidx.documentfile.provider.DocumentFile
+import com.music.bitchord.data.local.LocalMusicCatalog
+import com.music.bitchord.data.local.LocalMusicTrack
 import com.music.bitchord.data.model.Song
+import com.music.bitchord.data.settings.AppSettings
 import com.music.bitchord.download.DownloadStore
 import com.music.bitchord.download.Downloads
 import kotlinx.coroutines.Dispatchers
@@ -21,6 +25,9 @@ import java.util.Locale
 object LocalMediaRepository {
 
     private const val TAG = "BitChord"
+
+    @Volatile
+    private var cachedCatalog: LocalMusicCatalog? = null
 
     /** Check if storage/audio permission is granted to query device local music. */
     fun hasStoragePermission(context: Context): Boolean {
@@ -223,6 +230,115 @@ object LocalMediaRepository {
 
         songs
     }
+
+
+    /**
+     * One catalog for both access modes. MediaStore rows are merged first so a
+     * file visible through both A and B keeps the stable MediaStore content URI.
+     */
+    suspend fun refresh(context: Context): LocalMusicCatalog = withContext(Dispatchers.IO) {
+        val allMusicRows = if (
+            AppSettings.localAllMusicEnabled.value && hasStoragePermission(context)
+        ) {
+            getLocalMusic(context).map(::mediaStoreTrack)
+        } else {
+            emptyList()
+        }
+
+        val selectedRows = AppSettings.localMusicTreeUris.value
+            .toList()
+            .sorted()
+            .flatMap { scanTree(context, it) }
+
+        LocalMusicCatalog.merge(allMusicRows, selectedRows).also { cachedCatalog = it }
+    }
+
+    suspend fun catalog(context: Context): LocalMusicCatalog =
+        cachedCatalog ?: refresh(context)
+
+    fun invalidate() {
+        cachedCatalog = null
+    }
+
+    private fun mediaStoreTrack(song: Song): LocalMusicTrack {
+        val parent = song.localPath
+            ?.substringBeforeLast('/', missingDelimiterValue = "")
+            ?.takeIf { it.isNotBlank() }
+            ?: "On device"
+        val label = parent.substringAfterLast('/').ifBlank { "On device" }
+        return LocalMusicTrack(
+            song = song,
+            folderKey = parent,
+            folderLabel = label,
+            identity = identityFor(song),
+        )
+    }
+
+    /** Scan one persisted Storage Access Framework tree without broad file access. */
+    private fun scanTree(context: Context, treeUriString: String): List<LocalMusicTrack> {
+        val treeUri = runCatching { Uri.parse(treeUriString) }.getOrNull() ?: return emptyList()
+        val hasGrant = context.contentResolver.persistedUriPermissions.any {
+            it.uri == treeUri && it.isReadPermission
+        }
+        if (!hasGrant) return emptyList()
+
+        val root = runCatching { DocumentFile.fromTreeUri(context, treeUri) }
+            .getOrNull() ?: return emptyList()
+        if (!root.exists() || !root.isDirectory) return emptyList()
+
+        val rows = mutableListOf<LocalMusicTrack>()
+        val rootLabel = root.name?.takeIf { it.isNotBlank() } ?: "Selected folder"
+
+        fun visit(directory: DocumentFile, path: String) {
+            val children = runCatching { directory.listFiles().toList() }
+                .getOrElse {
+                    Log.w(TAG, "Cannot read selected music folder $path: ${it.message}")
+                    return
+                }
+            children.sortedBy { it.name.orEmpty().lowercase(Locale.ROOT) }.forEach { child ->
+                val name = child.name.orEmpty()
+                when {
+                    child.isDirectory -> {
+                        val nextLabel = name.ifBlank { "Folder" }
+                        visit(child, "$path/$nextLabel")
+                    }
+                    child.isFile && (
+                        child.type?.startsWith("audio/", ignoreCase = true) == true ||
+                            isAudioFileName(name)
+                    ) -> {
+                        val uri = child.uri.toString()
+                        val song = buildSongFromUri(
+                            context = context,
+                            uriStr = uri,
+                            fileName = name.ifBlank { "Audio" },
+                        ).copy(localPath = "$path/${name.ifBlank { "Audio" }}")
+                        rows += LocalMusicTrack(
+                            song = song,
+                            folderKey = path,
+                            folderLabel = path.substringAfterLast('/').ifBlank { rootLabel },
+                            identity = identityFor(song),
+                        )
+                    }
+                }
+            }
+        }
+
+        runCatching { visit(root, rootLabel) }
+            .onFailure { Log.w(TAG, "Failed scanning selected music tree: ${it.message}") }
+        return rows
+    }
+
+    /**
+     * A and B can expose the same physical file through different content URIs.
+     * Tags + duration give us a provider-independent identity without asking for
+     * filesystem-wide path access. The first occurrence wins during merge.
+     */
+    private fun identityFor(song: Song): String = listOf(
+        song.title.trim().lowercase(Locale.ROOT),
+        song.artist.trim().lowercase(Locale.ROOT),
+        song.albumName.orEmpty().trim().lowercase(Locale.ROOT),
+        song.durationText.orEmpty().trim(),
+    ).joinToString("|")
 
     private fun isAudioFileName(name: String): Boolean {
         val lower = name.lowercase(Locale.ROOT)
