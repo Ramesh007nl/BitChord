@@ -16,6 +16,7 @@ import com.music.bitchord.playback.AndroidAutoLocalDataSource
 import com.music.bitchord.playback.AndroidAutoLocalSection
 import com.music.bitchord.playback.AndroidAutoMediaIds
 import com.music.bitchord.playback.AndroidAutoRoute
+import com.music.bitchord.playback.toSong
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -136,14 +137,21 @@ class AndroidAutoLocalMusicTest {
             100,
         ).getOrThrow().single()
 
+        // Pin each boundary separately so a failure says where local identity
+        // was lost instead of only saying the final MediaItem was wrong.
+        assertEquals(song.localUri, row.mediaMetadata.extras?.getString("tantov.auto.localUri"))
+        assertEquals(song.localPath, row.mediaMetadata.extras?.getString("tantov.auto.localPath"))
+
         // A fresh catalog has no remembered Song, so this proves the browse-row
         // extras are sufficient to reconstruct a local playable item.
         val freshCatalog = AndroidAutoCatalog(FakeOnlineDataSource(), local)
         val playable = freshCatalog.playableTrack(row).getOrThrow()
+        val reconstructed = playable.toSong()
 
         assertEquals(song.videoId, playable.mediaId)
-        assertTrue(playable.localConfiguration?.uri?.toString()?.contains("local.mp3") == true ||
-            playable.localConfiguration?.uri?.toString() == song.localUri)
+        assertEquals(song.localUri, reconstructed.localUri)
+        assertEquals(song.localPath, reconstructed.localPath)
+        assertEquals(song.localUri, playable.localConfiguration?.uri?.toString())
     }
 
     @Test
