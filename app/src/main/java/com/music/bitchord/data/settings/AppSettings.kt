@@ -294,6 +294,15 @@ object AppSettings {
      */
     val pinnedPlaylists = MutableStateFlow<List<String>>(emptyList())
 
+    /** Whether the optional Local Music first-run choice has already been shown. */
+    val localMusicSetupSeen = MutableStateFlow(false)
+
+    /** A: expose Android's MediaStore music library. */
+    val localAllMusicEnabled = MutableStateFlow(false)
+
+    /** B: Storage Access Framework tree URIs the user explicitly granted. */
+    val localMusicTreeUris = MutableStateFlow<Set<String>>(emptySet())
+
     /** How many playlists [pinnedPlaylists] can hold at once. */
     const val MAX_PINNED_PLAYLISTS = 5
 
@@ -484,6 +493,9 @@ object AppSettings {
         spotifySpdcToken.value = prefs.getString(KEY_SPOTIFY_SPDC_TOKEN, "").orEmpty()
         replayGenres.value = prefs.getBoolean(KEY_REPLAY_GENRES, true)
         pinnedPlaylists.value = readPinnedPlaylists()
+        localMusicSetupSeen.value = prefs.getBoolean(KEY_LOCAL_MUSIC_SETUP_SEEN, false)
+        localAllMusicEnabled.value = prefs.getBoolean(KEY_LOCAL_ALL_MUSIC_ENABLED, false)
+        localMusicTreeUris.value = prefs.getStringSet(KEY_LOCAL_MUSIC_TREE_URIS, emptySet()).orEmpty().toSet()
         discordToken.value = authStore.discordToken.orEmpty()
         discordUsername.value = prefs.getString(KEY_DISCORD_USERNAME, "").orEmpty()
         discordName.value = prefs.getString(KEY_DISCORD_NAME, "").orEmpty()
@@ -934,6 +946,29 @@ object AppSettings {
      * disappears from the row without them ever having touched it, the moment
      * they pin a sixth. Unpinning always succeeds.
      */
+    fun setLocalMusicSetupSeen(value: Boolean) {
+        localMusicSetupSeen.value = value
+        prefs.edit().putBoolean(KEY_LOCAL_MUSIC_SETUP_SEEN, value).apply()
+    }
+
+    fun setLocalAllMusicEnabled(value: Boolean) {
+        localAllMusicEnabled.value = value
+        prefs.edit().putBoolean(KEY_LOCAL_ALL_MUSIC_ENABLED, value).apply()
+    }
+
+    fun addLocalMusicTreeUri(uri: String) {
+        if (uri.isBlank()) return
+        val updated = localMusicTreeUris.value + uri
+        localMusicTreeUris.value = updated
+        prefs.edit().putStringSet(KEY_LOCAL_MUSIC_TREE_URIS, updated).apply()
+    }
+
+    fun removeLocalMusicTreeUri(uri: String) {
+        val updated = localMusicTreeUris.value - uri
+        localMusicTreeUris.value = updated
+        prefs.edit().putStringSet(KEY_LOCAL_MUSIC_TREE_URIS, updated).apply()
+    }
+
     fun togglePinnedPlaylist(browseId: String): Boolean {
         val current = pinnedPlaylists.value
         val updated = when {
@@ -1074,6 +1109,9 @@ object AppSettings {
     private const val KEY_PRIORITIZE_SYLLABLE_SYNC = "prioritize_syllable_sync"
     private const val KEY_REPLAY_GENRES = "replay_genres"
     private const val KEY_PINNED_PLAYLISTS = "pinned_playlists"
+    private const val KEY_LOCAL_MUSIC_SETUP_SEEN = "local_music_setup_seen"
+    private const val KEY_LOCAL_ALL_MUSIC_ENABLED = "local_all_music_enabled"
+    private const val KEY_LOCAL_MUSIC_TREE_URIS = "local_music_tree_uris"
 
     private const val KEY_LASTFM_ENABLED = "lastfm_enabled"
     private const val KEY_LASTFM_USERNAME = "lastfm_username"
