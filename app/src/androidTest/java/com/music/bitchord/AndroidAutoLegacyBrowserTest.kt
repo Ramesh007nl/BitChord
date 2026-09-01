@@ -97,7 +97,7 @@ class AndroidAutoLegacyBrowserTest {
         }
         failure?.let(::fail)
         assertNotNull("Expected a non-null legacy root id", rootId)
-        assertEquals("bitchord:auto:v1:root", rootId)
+        assertEquals("tantov:auto:v1:root", rootId)
         assertEquals(
             listOf("Home", "Explore", "Recently Played", "Library"),
             childTitles,
