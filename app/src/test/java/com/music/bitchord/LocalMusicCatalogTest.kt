@@ -8,7 +8,13 @@ import org.junit.Test
 
 class LocalMusicCatalogTest {
     private fun track(id: String, identity: String, folder: String) = LocalMusicTrack(
-        song = Song(videoId = id, title = id, artist = "Artist", localUri = id),
+        song = Song(
+            videoId = id,
+            title = id,
+            artist = "Artist",
+            thumbnailUrl = null,
+            localUri = id,
+        ),
         folderKey = folder,
         folderLabel = folder.substringAfterLast('/'),
         identity = identity,
