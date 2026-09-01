@@ -10,36 +10,147 @@ def replace_once(path: str, old: str, new: str) -> None:
     p.write_text(text.replace(old, new, 1))
 
 
-# Task 2: persistent A+B local-music access state.
-model = Path("app/src/main/java/com/music/bitchord/data/local/LocalMusicAccess.kt")
-model.parent.mkdir(parents=True, exist_ok=True)
-if model.exists():
-    raise SystemExit(f"{model}: expected new file but it already exists")
-model.write_text('''package com.music.bitchord.data.local\n\ndata class LocalMusicAccessConfig(\n    val setupSeen: Boolean = false,\n    val allMusicEnabled: Boolean = false,\n    val treeUris: Set<String> = emptySet(),\n) {\n    fun markSetupSeen() = copy(setupSeen = true)\n    fun withAllMusic(enabled: Boolean) = copy(allMusicEnabled = enabled)\n    fun addTree(uri: String) = copy(treeUris = treeUris + uri)\n    fun removeTree(uri: String) = copy(treeUris = treeUris - uri)\n}\n''')
+# Task 3: merge MediaStore (A) + persisted SAF folder trees (B) into one catalog.
+models = Path("app/src/main/java/com/music/bitchord/data/local/LocalMusicModels.kt")
+models.parent.mkdir(parents=True, exist_ok=True)
+if models.exists():
+    raise SystemExit(f"{models}: expected new file but it already exists")
+models.write_text('''package com.music.bitchord.data.local\n\nimport com.music.bitchord.data.model.Song\nimport java.util.Locale\n\ndata class LocalMusicTrack(\n    val song: Song,\n    val folderKey: String,\n    val folderLabel: String,\n    val identity: String,\n)\n\ndata class LocalMusicFolder(\n    val key: String,\n    val label: String,\n    val songs: List<Song>,\n)\n\ndata class LocalMusicCatalog(val tracks: List<LocalMusicTrack>) {\n    val songs: List<Song> get() = tracks.map { it.song }\n\n    val folders: List<LocalMusicFolder> get() = tracks\n        .groupBy { it.folderKey }\n        .map { (key, rows) ->\n            LocalMusicFolder(key, rows.first().folderLabel, rows.map { it.song })\n        }\n        .sortedBy { it.label.lowercase(Locale.ROOT) }\n\n    fun search(query: String): List<Song> {\n        val q = query.trim()\n        if (q.isEmpty()) return emptyList()\n        return songs.filter { song ->\n            song.title.contains(q, ignoreCase = true) ||\n                song.artist.contains(q, ignoreCase = true) ||\n                song.albumName?.contains(q, ignoreCase = true) == true\n        }\n    }\n\n    companion object {\n        fun merge(vararg sources: List<LocalMusicTrack>): LocalMusicCatalog =\n            LocalMusicCatalog(\n                sources.asSequence()\n                    .flatten()\n                    .distinctBy { it.identity }\n                    .toList(),\n            )\n    }\n}\n''')
 
-settings = "app/src/main/java/com/music/bitchord/data/settings/AppSettings.kt"
+# AndroidX DocumentFile is the SAF tree traversal helper.
 replace_once(
-    settings,
-    '''    val pinnedPlaylists = MutableStateFlow<List<String>>(emptyList())\n\n    /** How many playlists [pinnedPlaylists] can hold at once. */''',
-    '''    val pinnedPlaylists = MutableStateFlow<List<String>>(emptyList())\n\n    /** Whether the optional Local Music first-run choice has already been shown. */\n    val localMusicSetupSeen = MutableStateFlow(false)\n\n    /** A: expose Android's MediaStore music library. */\n    val localAllMusicEnabled = MutableStateFlow(false)\n\n    /** B: Storage Access Framework tree URIs the user explicitly granted. */\n    val localMusicTreeUris = MutableStateFlow<Set<String>>(emptySet())\n\n    /** How many playlists [pinnedPlaylists] can hold at once. */''',
+    "app/build.gradle.kts",
+    '    implementation("androidx.core:core-ktx:1.15.0")\n    implementation("androidx.appcompat:appcompat:1.7.0")',
+    '    implementation("androidx.core:core-ktx:1.15.0")\n    implementation("androidx.documentfile:documentfile:1.0.1")\n    implementation("androidx.appcompat:appcompat:1.7.0")',
+)
+
+repo = "app/src/main/java/com/music/bitchord/data/LocalMediaRepository.kt"
+replace_once(
+    repo,
+    '''import androidx.core.content.ContextCompat\nimport com.music.bitchord.data.model.Song''',
+    '''import androidx.core.content.ContextCompat\nimport androidx.documentfile.provider.DocumentFile\nimport com.music.bitchord.data.local.LocalMusicCatalog\nimport com.music.bitchord.data.local.LocalMusicTrack\nimport com.music.bitchord.data.model.Song\nimport com.music.bitchord.data.settings.AppSettings''',
 )
 
 replace_once(
-    settings,
-    '''        replayGenres.value = prefs.getBoolean(KEY_REPLAY_GENRES, true)\n        pinnedPlaylists.value = readPinnedPlaylists()\n        discordToken.value = authStore.discordToken.orEmpty()''',
-    '''        replayGenres.value = prefs.getBoolean(KEY_REPLAY_GENRES, true)\n        pinnedPlaylists.value = readPinnedPlaylists()\n        localMusicSetupSeen.value = prefs.getBoolean(KEY_LOCAL_MUSIC_SETUP_SEEN, false)\n        localAllMusicEnabled.value = prefs.getBoolean(KEY_LOCAL_ALL_MUSIC_ENABLED, false)\n        localMusicTreeUris.value = prefs.getStringSet(KEY_LOCAL_MUSIC_TREE_URIS, emptySet()).orEmpty().toSet()\n        discordToken.value = authStore.discordToken.orEmpty()''',
+    repo,
+    '''object LocalMediaRepository {\n\n    private const val TAG = "BitChord"''',
+    '''object LocalMediaRepository {\n\n    private const val TAG = "BitChord"\n\n    @Volatile\n    private var cachedCatalog: LocalMusicCatalog? = null''',
 )
 
+insert = r'''
+    /**
+     * One catalog for both access modes. MediaStore rows are merged first so a
+     * file visible through both A and B keeps the stable MediaStore content URI.
+     */
+    suspend fun refresh(context: Context): LocalMusicCatalog = withContext(Dispatchers.IO) {
+        val allMusicRows = if (
+            AppSettings.localAllMusicEnabled.value && hasStoragePermission(context)
+        ) {
+            getLocalMusic(context).map(::mediaStoreTrack)
+        } else {
+            emptyList()
+        }
+
+        val selectedRows = AppSettings.localMusicTreeUris.value
+            .toList()
+            .sorted()
+            .flatMap { scanTree(context, it) }
+
+        LocalMusicCatalog.merge(allMusicRows, selectedRows).also { cachedCatalog = it }
+    }
+
+    suspend fun catalog(context: Context): LocalMusicCatalog =
+        cachedCatalog ?: refresh(context)
+
+    fun invalidate() {
+        cachedCatalog = null
+    }
+
+    private fun mediaStoreTrack(song: Song): LocalMusicTrack {
+        val parent = song.localPath
+            ?.substringBeforeLast('/', missingDelimiterValue = "")
+            ?.takeIf { it.isNotBlank() }
+            ?: "On device"
+        val label = parent.substringAfterLast('/').ifBlank { "On device" }
+        return LocalMusicTrack(
+            song = song,
+            folderKey = parent,
+            folderLabel = label,
+            identity = identityFor(song),
+        )
+    }
+
+    /** Scan one persisted Storage Access Framework tree without broad file access. */
+    private fun scanTree(context: Context, treeUriString: String): List<LocalMusicTrack> {
+        val treeUri = runCatching { Uri.parse(treeUriString) }.getOrNull() ?: return emptyList()
+        val hasGrant = context.contentResolver.persistedUriPermissions.any {
+            it.uri == treeUri && it.isReadPermission
+        }
+        if (!hasGrant) return emptyList()
+
+        val root = runCatching { DocumentFile.fromTreeUri(context, treeUri) }
+            .getOrNull() ?: return emptyList()
+        if (!root.exists() || !root.isDirectory) return emptyList()
+
+        val rows = mutableListOf<LocalMusicTrack>()
+        val rootLabel = root.name?.takeIf { it.isNotBlank() } ?: "Selected folder"
+
+        fun visit(directory: DocumentFile, path: String) {
+            val children = runCatching { directory.listFiles().toList() }
+                .getOrElse {
+                    Log.w(TAG, "Cannot read selected music folder $path: ${it.message}")
+                    return
+                }
+            children.sortedBy { it.name.orEmpty().lowercase(Locale.ROOT) }.forEach { child ->
+                val name = child.name.orEmpty()
+                when {
+                    child.isDirectory -> {
+                        val nextLabel = name.ifBlank { "Folder" }
+                        visit(child, "$path/$nextLabel")
+                    }
+                    child.isFile && (
+                        child.type?.startsWith("audio/", ignoreCase = true) == true ||
+                            isAudioFileName(name)
+                    ) -> {
+                        val uri = child.uri.toString()
+                        val song = buildSongFromUri(
+                            context = context,
+                            uriStr = uri,
+                            fileName = name.ifBlank { "Audio" },
+                        ).copy(localPath = "$path/${name.ifBlank { "Audio" }}")
+                        rows += LocalMusicTrack(
+                            song = song,
+                            folderKey = path,
+                            folderLabel = path.substringAfterLast('/').ifBlank { rootLabel },
+                            identity = identityFor(song),
+                        )
+                    }
+                }
+            }
+        }
+
+        runCatching { visit(root, rootLabel) }
+            .onFailure { Log.w(TAG, "Failed scanning selected music tree: ${it.message}") }
+        return rows
+    }
+
+    /**
+     * A and B can expose the same physical file through different content URIs.
+     * Tags + duration give us a provider-independent identity without asking for
+     * filesystem-wide path access. The first occurrence wins during merge.
+     */
+    private fun identityFor(song: Song): String = listOf(
+        song.title.trim().lowercase(Locale.ROOT),
+        song.artist.trim().lowercase(Locale.ROOT),
+        song.albumName.orEmpty().trim().lowercase(Locale.ROOT),
+        song.durationText.orEmpty().trim(),
+    ).joinToString("|")
+
+'''
 replace_once(
-    settings,
-    '''    fun togglePinnedPlaylist(browseId: String): Boolean {''',
-    '''    fun setLocalMusicSetupSeen(value: Boolean) {\n        localMusicSetupSeen.value = value\n        prefs.edit().putBoolean(KEY_LOCAL_MUSIC_SETUP_SEEN, value).apply()\n    }\n\n    fun setLocalAllMusicEnabled(value: Boolean) {\n        localAllMusicEnabled.value = value\n        prefs.edit().putBoolean(KEY_LOCAL_ALL_MUSIC_ENABLED, value).apply()\n    }\n\n    fun addLocalMusicTreeUri(uri: String) {\n        if (uri.isBlank()) return\n        val updated = localMusicTreeUris.value + uri\n        localMusicTreeUris.value = updated\n        prefs.edit().putStringSet(KEY_LOCAL_MUSIC_TREE_URIS, updated).apply()\n    }\n\n    fun removeLocalMusicTreeUri(uri: String) {\n        val updated = localMusicTreeUris.value - uri\n        localMusicTreeUris.value = updated\n        prefs.edit().putStringSet(KEY_LOCAL_MUSIC_TREE_URIS, updated).apply()\n    }\n\n    fun togglePinnedPlaylist(browseId: String): Boolean {''',
+    repo,
+    '''    private fun isAudioFileName(name: String): Boolean {''',
+    insert + '''    private fun isAudioFileName(name: String): Boolean {''',
 )
 
-replace_once(
-    settings,
-    '''    private const val KEY_REPLAY_GENRES = "replay_genres"\n    private const val KEY_PINNED_PLAYLISTS = "pinned_playlists"\n\n    private const val KEY_LASTFM_ENABLED = "lastfm_enabled"''',
-    '''    private const val KEY_REPLAY_GENRES = "replay_genres"\n    private const val KEY_PINNED_PLAYLISTS = "pinned_playlists"\n    private const val KEY_LOCAL_MUSIC_SETUP_SEEN = "local_music_setup_seen"\n    private const val KEY_LOCAL_ALL_MUSIC_ENABLED = "local_all_music_enabled"\n    private const val KEY_LOCAL_MUSIC_TREE_URIS = "local_music_tree_uris"\n\n    private const val KEY_LASTFM_ENABLED = "lastfm_enabled"''',
-)
-
-Path("/tmp/tantov-commit-message").write_text("feat(local): persist music access choices\n")
+Path("/tmp/tantov-commit-message").write_text("feat(local): merge MediaStore and folder music\n")
