@@ -116,7 +116,7 @@ data class LocalMusicFolder(
     val songs: List<Song>,
 )
 
-/** Folder-tab filtering: match the visible leaf or its parent path. */
+/** Folder-tab filtering matches the visible leaf name or its full parent path. */
 fun filterLocalMusicFolders(
     folders: List<LocalMusicFolder>,
     query: String,
