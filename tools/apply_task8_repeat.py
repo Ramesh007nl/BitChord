@@ -11,7 +11,6 @@ def replace_once(path: Path, old: str, new: str) -> None:
 
 service = Path("app/src/main/java/com/music/bitchord/playback/PlaybackService.kt")
 main = Path("app/src/main/java/com/music/bitchord/MainActivity.kt")
-smoke = Path(".github/workflows/android-auto-legacy-smoke.yml")
 
 replace_once(
     service,
@@ -122,14 +121,6 @@ replace_once(
                     }
 ''',
     '''                    val next = nextRepeatMode(it.repeatMode)
-''',
-)
-
-replace_once(
-    smoke,
-    '''    branches: [feat/android-auto-full]
-''',
-    '''    branches: [feat/android-auto-full, feat/tantov-music-v1]
 ''',
 )
 
