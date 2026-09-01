@@ -10,147 +10,111 @@ def replace_once(path: str, old: str, new: str) -> None:
     p.write_text(text.replace(old, new, 1))
 
 
-# Task 3: merge MediaStore (A) + persisted SAF folder trees (B) into one catalog.
-models = Path("app/src/main/java/com/music/bitchord/data/local/LocalMusicModels.kt")
-models.parent.mkdir(parents=True, exist_ok=True)
-if models.exists():
-    raise SystemExit(f"{models}: expected new file but it already exists")
-models.write_text('''package com.music.bitchord.data.local\n\nimport com.music.bitchord.data.model.Song\nimport java.util.Locale\n\ndata class LocalMusicTrack(\n    val song: Song,\n    val folderKey: String,\n    val folderLabel: String,\n    val identity: String,\n)\n\ndata class LocalMusicFolder(\n    val key: String,\n    val label: String,\n    val songs: List<Song>,\n)\n\ndata class LocalMusicCatalog(val tracks: List<LocalMusicTrack>) {\n    val songs: List<Song> get() = tracks.map { it.song }\n\n    val folders: List<LocalMusicFolder> get() = tracks\n        .groupBy { it.folderKey }\n        .map { (key, rows) ->\n            LocalMusicFolder(key, rows.first().folderLabel, rows.map { it.song })\n        }\n        .sortedBy { it.label.lowercase(Locale.ROOT) }\n\n    fun search(query: String): List<Song> {\n        val q = query.trim()\n        if (q.isEmpty()) return emptyList()\n        return songs.filter { song ->\n            song.title.contains(q, ignoreCase = true) ||\n                song.artist.contains(q, ignoreCase = true) ||\n                song.albumName?.contains(q, ignoreCase = true) == true\n        }\n    }\n\n    companion object {\n        fun merge(vararg sources: List<LocalMusicTrack>): LocalMusicCatalog =\n            LocalMusicCatalog(\n                sources.asSequence()\n                    .flatten()\n                    .distinctBy { it.identity }\n                    .toList(),\n            )\n    }\n}\n''')
-
-# AndroidX DocumentFile is the SAF tree traversal helper.
+# Task 4: first-run A/B/A+B setup plus Settings -> Local Music management.
+access = "app/src/main/java/com/music/bitchord/data/local/LocalMusicAccess.kt"
 replace_once(
-    "app/build.gradle.kts",
-    '    implementation("androidx.core:core-ktx:1.15.0")\n    implementation("androidx.appcompat:appcompat:1.7.0")',
-    '    implementation("androidx.core:core-ktx:1.15.0")\n    implementation("androidx.documentfile:documentfile:1.0.1")\n    implementation("androidx.appcompat:appcompat:1.7.0")',
+    access,
+    '''package com.music.bitchord.data.local\n\ndata class LocalMusicAccessConfig(\n    val setupSeen: Boolean = false,\n    val allMusicEnabled: Boolean = false,\n    val treeUris: Set<String> = emptySet(),\n) {\n    fun markSetupSeen() = copy(setupSeen = true)\n    fun withAllMusic(enabled: Boolean) = copy(allMusicEnabled = enabled)\n    fun addTree(uri: String) = copy(treeUris = treeUris + uri)\n    fun removeTree(uri: String) = copy(treeUris = treeUris - uri)\n}\n''',
+    '''package com.music.bitchord.data.local\n\ndata class LocalMusicAccessConfig(\n    val setupSeen: Boolean = false,\n    val allMusicEnabled: Boolean = false,\n    val treeUris: Set<String> = emptySet(),\n) {\n    fun markSetupSeen() = copy(setupSeen = true)\n    fun withAllMusic(enabled: Boolean) = copy(allMusicEnabled = enabled)\n    fun addTree(uri: String) = copy(treeUris = treeUris + uri)\n    fun removeTree(uri: String) = copy(treeUris = treeUris - uri)\n}\n\nenum class LocalMusicSetupChoice {\n    ALL_MUSIC,\n    CHOOSE_FOLDERS,\n    BOTH,\n    NOT_NOW,\n}\n\ndata class LocalMusicSetupRequest(\n    val enableAllMusic: Boolean,\n    val pickFolder: Boolean,\n)\n\nfun requestForSetupChoice(choice: LocalMusicSetupChoice): LocalMusicSetupRequest = when (choice) {\n    LocalMusicSetupChoice.ALL_MUSIC -> LocalMusicSetupRequest(enableAllMusic = true, pickFolder = false)\n    LocalMusicSetupChoice.CHOOSE_FOLDERS -> LocalMusicSetupRequest(enableAllMusic = false, pickFolder = true)\n    LocalMusicSetupChoice.BOTH -> LocalMusicSetupRequest(enableAllMusic = true, pickFolder = true)\n    LocalMusicSetupChoice.NOT_NOW -> LocalMusicSetupRequest(enableAllMusic = false, pickFolder = false)\n}\n''',
 )
 
-repo = "app/src/main/java/com/music/bitchord/data/LocalMediaRepository.kt"
+setup_sheet = Path("app/src/main/java/com/music/bitchord/ui/screens/LocalMusicSetupSheet.kt")
+if setup_sheet.exists():
+    raise SystemExit(f"{setup_sheet}: expected new file but it already exists")
+setup_sheet.write_text('''package com.music.bitchord.ui.screens\n\nimport androidx.compose.foundation.layout.Arrangement\nimport androidx.compose.foundation.layout.Column\nimport androidx.compose.foundation.layout.Spacer\nimport androidx.compose.foundation.layout.fillMaxWidth\nimport androidx.compose.foundation.layout.height\nimport androidx.compose.foundation.layout.navigationBarsPadding\nimport androidx.compose.foundation.layout.padding\nimport androidx.compose.material3.Button\nimport androidx.compose.material3.MaterialTheme\nimport androidx.compose.material3.OutlinedButton\nimport androidx.compose.material3.Text\nimport androidx.compose.material3.TextButton\nimport androidx.compose.runtime.Composable\nimport androidx.compose.ui.Modifier\nimport androidx.compose.ui.unit.dp\n\n@Composable\nfun LocalMusicSetupSheet(\n    onAllMusic: () -> Unit,\n    onChooseFolders: () -> Unit,\n    onUseBoth: () -> Unit,\n    onNotNow: () -> Unit,\n) {\n    Column(\n        modifier = Modifier\n            .fillMaxWidth()\n            .navigationBarsPadding()\n            .padding(horizontal = 20.dp, vertical = 12.dp),\n        verticalArrangement = Arrangement.spacedBy(10.dp),\n    ) {\n        Text(\n            text = "Set up Local Music",\n            style = MaterialTheme.typography.headlineMedium,\n        )\n        Text(\n            text = "TanTov Music can use Android's music library, folders you choose, or both. You can change this later in Settings.",\n            style = MaterialTheme.typography.bodyMedium,\n            color = MaterialTheme.colorScheme.onSurfaceVariant,\n        )\n        Spacer(Modifier.height(4.dp))\n        Button(\n            onClick = onAllMusic,\n            modifier = Modifier.fillMaxWidth(),\n        ) {\n            Text("All Music on this phone")\n        }\n        OutlinedButton(\n            onClick = onChooseFolders,\n            modifier = Modifier.fillMaxWidth(),\n        ) {\n            Text("Choose music folders")\n        }\n        OutlinedButton(\n            onClick = onUseBoth,\n            modifier = Modifier.fillMaxWidth(),\n        ) {\n            Text("Use both")\n        }\n        TextButton(\n            onClick = onNotNow,\n            modifier = Modifier.fillMaxWidth(),\n        ) {\n            Text("Not now")\n        }\n    }\n}\n''')
+
+settings_screen = Path("app/src/main/java/com/music/bitchord/ui/screens/LocalMusicSettingsScreen.kt")
+if settings_screen.exists():
+    raise SystemExit(f"{settings_screen}: expected new file but it already exists")
+settings_screen.write_text('''package com.music.bitchord.ui.screens\n\nimport android.net.Uri\nimport androidx.compose.foundation.layout.Arrangement\nimport androidx.compose.foundation.layout.Column\nimport androidx.compose.foundation.layout.PaddingValues\nimport androidx.compose.foundation.layout.Row\nimport androidx.compose.foundation.layout.Spacer\nimport androidx.compose.foundation.layout.fillMaxSize\nimport androidx.compose.foundation.layout.fillMaxWidth\nimport androidx.compose.foundation.layout.height\nimport androidx.compose.foundation.layout.padding\nimport androidx.compose.foundation.layout.size\nimport androidx.compose.foundation.layout.width\nimport androidx.compose.foundation.layout.weight\nimport androidx.compose.foundation.lazy.LazyColumn\nimport androidx.compose.material.icons.Icons\nimport androidx.compose.material.icons.rounded.DeleteOutline\nimport androidx.compose.material.icons.rounded.Folder\nimport androidx.compose.material.icons.rounded.Refresh\nimport androidx.compose.material.icons.rounded.Storage\nimport androidx.compose.material3.Card\nimport androidx.compose.material3.HorizontalDivider\nimport androidx.compose.material3.Icon\nimport androidx.compose.material3.IconButton\nimport androidx.compose.material3.MaterialTheme\nimport androidx.compose.material3.OutlinedButton\nimport androidx.compose.material3.Switch\nimport androidx.compose.material3.Text\nimport androidx.compose.runtime.Composable\nimport androidx.compose.ui.Alignment\nimport androidx.compose.ui.Modifier\nimport androidx.compose.ui.platform.LocalContext\nimport androidx.compose.ui.text.style.TextOverflow\nimport androidx.compose.ui.unit.dp\nimport androidx.documentfile.provider.DocumentFile\n\n@Composable\nfun LocalMusicSettingsScreen(\n    allMusicEnabled: Boolean,\n    allMusicPermissionGranted: Boolean,\n    treeUris: List<String>,\n    rescanStatus: String?,\n    onAllMusicChanged: (Boolean) -> Unit,\n    onAddFolder: () -> Unit,\n    onRemoveFolder: (String) -> Unit,\n    onRescan: () -> Unit,\n    contentPadding: PaddingValues,\n    modifier: Modifier = Modifier,\n) {\n    val context = LocalContext.current\n\n    LazyColumn(\n        modifier = modifier.fillMaxSize(),\n        contentPadding = contentPadding,\n        verticalArrangement = Arrangement.spacedBy(12.dp),\n    ) {\n        item {\n            Text(\n                text = "Local Music",\n                style = MaterialTheme.typography.displayLarge,\n                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),\n            )\n        }\n\n        item {\n            Card(\n                modifier = Modifier\n                    .padding(horizontal = 16.dp)\n                    .fillMaxWidth(),\n            ) {\n                Row(\n                    modifier = Modifier.padding(16.dp),\n                    verticalAlignment = Alignment.CenterVertically,\n                ) {\n                    Icon(\n                        Icons.Rounded.Storage,\n                        contentDescription = null,\n                        modifier = Modifier.size(24.dp),\n                    )\n                    Spacer(Modifier.width(14.dp))\n                    Column(Modifier.weight(1f)) {\n                        Text("All Music on this phone", style = MaterialTheme.typography.titleMedium)\n                        Text(\n                            text = when {\n                                allMusicEnabled && allMusicPermissionGranted -> "Audio access granted"\n                                allMusicEnabled -> "Audio permission is needed"\n                                else -> "Off"\n                            },\n                            style = MaterialTheme.typography.bodySmall,\n                            color = MaterialTheme.colorScheme.onSurfaceVariant,\n                        )\n                    }\n                    Switch(\n                        checked = allMusicEnabled,\n                        onCheckedChange = onAllMusicChanged,\n                    )\n                }\n            }\n        }\n\n        item {\n            Card(\n                modifier = Modifier\n                    .padding(horizontal = 16.dp)\n                    .fillMaxWidth(),\n            ) {\n                Column(Modifier.padding(16.dp)) {\n                    Row(verticalAlignment = Alignment.CenterVertically) {\n                        Icon(\n                            Icons.Rounded.Folder,\n                            contentDescription = null,\n                            modifier = Modifier.size(24.dp),\n                        )\n                        Spacer(Modifier.width(14.dp))\n                        Column(Modifier.weight(1f)) {\n                            Text("Selected folders", style = MaterialTheme.typography.titleMedium)\n                            Text(\n                                if (treeUris.isEmpty()) "No folders added" else "${treeUris.size} folder${if (treeUris.size == 1) "" else "s"}",\n                                style = MaterialTheme.typography.bodySmall,\n                                color = MaterialTheme.colorScheme.onSurfaceVariant,\n                            )\n                        }\n                    }\n\n                    if (treeUris.isNotEmpty()) {\n                        Spacer(Modifier.height(10.dp))\n                        treeUris.forEachIndexed { index, treeUri ->\n                            if (index > 0) HorizontalDivider()\n                            val name = runCatching {\n                                DocumentFile.fromTreeUri(context, Uri.parse(treeUri))?.name\n                            }.getOrNull().orEmpty().ifBlank { treeUri }\n                            Row(\n                                modifier = Modifier\n                                    .fillMaxWidth()\n                                    .padding(vertical = 8.dp),\n                                verticalAlignment = Alignment.CenterVertically,\n                            ) {\n                                Column(Modifier.weight(1f)) {\n                                    Text(\n                                        text = name,\n                                        style = MaterialTheme.typography.bodyLarge,\n                                        maxLines = 1,\n                                        overflow = TextOverflow.Ellipsis,\n                                    )\n                                    Text(\n                                        text = treeUri,\n                                        style = MaterialTheme.typography.bodySmall,\n                                        color = MaterialTheme.colorScheme.onSurfaceVariant,\n                                        maxLines = 1,\n                                        overflow = TextOverflow.Ellipsis,\n                                    )\n                                }\n                                IconButton(onClick = { onRemoveFolder(treeUri) }) {\n                                    Icon(Icons.Rounded.DeleteOutline, contentDescription = "Remove folder")\n                                }\n                            }\n                        }\n                    }\n\n                    OutlinedButton(\n                        onClick = onAddFolder,\n                        modifier = Modifier.fillMaxWidth(),\n                    ) {\n                        Text("Add folder")\n                    }\n                }\n            }\n        }\n\n        item {\n            Card(\n                modifier = Modifier\n                    .padding(horizontal = 16.dp)\n                    .fillMaxWidth(),\n            ) {\n                Column(Modifier.padding(16.dp)) {\n                    Text("Music index", style = MaterialTheme.typography.titleMedium)\n                    Text(\n                        text = "Rescan after adding, removing or moving music files.",\n                        style = MaterialTheme.typography.bodySmall,\n                        color = MaterialTheme.colorScheme.onSurfaceVariant,\n                    )\n                    Spacer(Modifier.height(10.dp))\n                    OutlinedButton(\n                        onClick = onRescan,\n                        modifier = Modifier.fillMaxWidth(),\n                    ) {\n                        Icon(Icons.Rounded.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))\n                        Spacer(Modifier.width(8.dp))\n                        Text("Rescan music")\n                    }\n                    rescanStatus?.let {\n                        Spacer(Modifier.height(8.dp))\n                        Text(\n                            text = it,\n                            style = MaterialTheme.typography.bodyMedium,\n                            color = MaterialTheme.colorScheme.primary,\n                        )\n                    }\n                }\n            }\n        }\n\n        item { Spacer(Modifier.height(24.dp)) }\n    }\n}\n''')
+
+settings = "app/src/main/java/com/music/bitchord/ui/screens/SettingsSheet.kt"
 replace_once(
-    repo,
-    '''import androidx.core.content.ContextCompat\nimport com.music.bitchord.data.model.Song''',
-    '''import androidx.core.content.ContextCompat\nimport androidx.documentfile.provider.DocumentFile\nimport com.music.bitchord.data.local.LocalMusicCatalog\nimport com.music.bitchord.data.local.LocalMusicTrack\nimport com.music.bitchord.data.model.Song\nimport com.music.bitchord.data.settings.AppSettings''',
+    settings,
+    '''    onLyricsSources: () -> Unit,\n    onSources: () -> Unit,\n    onSpotifyCanvasAuth: () -> Unit,''',
+    '''    onLyricsSources: () -> Unit,\n    onSources: () -> Unit,\n    onLocalMusic: () -> Unit,\n    onSpotifyCanvasAuth: () -> Unit,''',
+)
+replace_once(
+    settings,
+    '''        SettingsGroup {\n            SettingsRow(\n                icon = Icons.Rounded.Person,\n                title = stringResource(R.string.account_integrations),\n                subtitle = account?.email?.takeIf { it.isNotBlank() }\n                    ?: if (signedIn) "Signed in" else "Not signed in",\n                onClick = onAccountScrobbling,\n            )\n        }\n\n        // The row that used to sit at the top of this group was called''',
+    '''        SettingsGroup {\n            SettingsRow(\n                icon = Icons.Rounded.Person,\n                title = stringResource(R.string.account_integrations),\n                subtitle = account?.email?.takeIf { it.isNotBlank() }\n                    ?: if (signedIn) "Signed in" else "Not signed in",\n                onClick = onAccountScrobbling,\n            )\n        }\n\n        SettingsGroup(header = "Library") {\n            SettingsRow(\n                icon = Icons.Rounded.Storage,\n                title = "Local Music",\n                subtitle = "All Music, selected folders and rescan",\n                onClick = onLocalMusic,\n            )\n        }\n\n        // The row that used to sit at the top of this group was called''',
 )
 
+main = "app/src/main/java/com/music/bitchord/MainActivity.kt"
 replace_once(
-    repo,
-    '''object LocalMediaRepository {\n\n    private const val TAG = "BitChord"''',
-    '''object LocalMediaRepository {\n\n    private const val TAG = "BitChord"\n\n    @Volatile\n    private var cachedCatalog: LocalMusicCatalog? = null''',
+    main,
+    '''import com.music.bitchord.data.LocalMediaRepository\nimport com.music.bitchord.data.NerdStats''',
+    '''import com.music.bitchord.data.LocalMediaRepository\nimport com.music.bitchord.data.local.LocalMusicSetupChoice\nimport com.music.bitchord.data.local.requestForSetupChoice\nimport com.music.bitchord.data.NerdStats''',
+)
+replace_once(
+    main,
+    '''import com.music.bitchord.ui.screens.DetailScreen\nimport com.music.bitchord.ui.screens.LocalMusicScreen\nimport com.music.bitchord.ui.screens.HomeScreen''',
+    '''import com.music.bitchord.ui.screens.DetailScreen\nimport com.music.bitchord.ui.screens.LocalMusicScreen\nimport com.music.bitchord.ui.screens.LocalMusicSetupSheet\nimport com.music.bitchord.ui.screens.LocalMusicSettingsScreen\nimport com.music.bitchord.ui.screens.HomeScreen''',
+)
+replace_once(
+    main,
+    '''    var showAccountScrobbling by remember { mutableStateOf(false) }\n    var showSources by remember { mutableStateOf(false) }\n    var showSpotifyCanvasAuth by remember { mutableStateOf(false) }''',
+    '''    var showAccountScrobbling by remember { mutableStateOf(false) }\n    var showSources by remember { mutableStateOf(false) }\n    var showLocalMusicSettings by remember { mutableStateOf(false) }\n    var showSpotifyCanvasAuth by remember { mutableStateOf(false) }''',
+)
+replace_once(
+    main,
+    '''    val signedIn by viewModel.signedIn.collectAsStateWithLifecycle()\n    val account by viewModel.account.collectAsStateWithLifecycle()\n    val historyState by viewModel.history.collectAsStateWithLifecycle()''',
+    '''    val signedIn by viewModel.signedIn.collectAsStateWithLifecycle()\n    val account by viewModel.account.collectAsStateWithLifecycle()\n    val localMusicSetupSeen by AppSettings.localMusicSetupSeen.collectAsStateWithLifecycle()\n    val localAllMusicEnabled by AppSettings.localAllMusicEnabled.collectAsStateWithLifecycle()\n    val localMusicTreeUris by AppSettings.localMusicTreeUris.collectAsStateWithLifecycle()\n    val historyState by viewModel.history.collectAsStateWithLifecycle()''',
+)
+replace_once(
+    main,
+    '''    LaunchedEffect(showSettings) {\n        if (!showSettings) {\n            showAccountScrobbling = false\n        }\n    }''',
+    '''    LaunchedEffect(showSettings) {\n        if (!showSettings) {\n            showAccountScrobbling = false\n            showLocalMusicSettings = false\n        }\n    }''',
+)
+replace_once(
+    main,
+    '''    val mediaPermissionLauncher = rememberLauncherForActivityResult(\n        ActivityResultContracts.RequestPermission(),\n    ) { granted ->\n        if (granted) {\n            viewModel.reloadLocalDetail("local:all")\n        } else {\n            Toast.makeText(context, "Storage permission is required to read local audio files", Toast.LENGTH_SHORT).show()\n        }\n    }''',
+    '''    var localRescanStatus by remember { mutableStateOf<String?>(null) }\n    var pickFolderAfterAudioPermission by remember { mutableStateOf(false) }\n\n    val refreshLocalCatalog: () -> Unit = {\n        LocalMediaRepository.invalidate()\n        scope.launch {\n            runCatching { LocalMediaRepository.refresh(context) }\n                .onSuccess { catalog ->\n                    localRescanStatus = "${catalog.songs.size} songs"\n                    viewModel.reloadLocalDetail("local:all")\n                }\n                .onFailure { error ->\n                    localRescanStatus = "Rescan failed: ${error.message ?: "unknown error"}"\n                }\n        }\n    }\n\n    val folderPicker = rememberLauncherForActivityResult(\n        ActivityResultContracts.OpenDocumentTree(),\n    ) { uri ->\n        if (uri != null) {\n            val persisted = runCatching {\n                context.contentResolver.takePersistableUriPermission(\n                    uri,\n                    Intent.FLAG_GRANT_READ_URI_PERMISSION,\n                )\n            }.isSuccess\n            if (persisted) {\n                AppSettings.addLocalMusicTreeUri(uri.toString())\n                refreshLocalCatalog()\n            } else {\n                Toast.makeText(context, "Couldn't keep access to that folder", Toast.LENGTH_SHORT).show()\n            }\n        }\n    }\n\n    val mediaPermissionLauncher = rememberLauncherForActivityResult(\n        ActivityResultContracts.RequestPermission(),\n    ) { granted ->\n        if (granted) {\n            AppSettings.setLocalAllMusicEnabled(true)\n            refreshLocalCatalog()\n        } else {\n            AppSettings.setLocalAllMusicEnabled(false)\n            Toast.makeText(context, "Audio permission was not granted", Toast.LENGTH_SHORT).show()\n        }\n        if (pickFolderAfterAudioPermission) {\n            pickFolderAfterAudioPermission = false\n            folderPicker.launch(null)\n        }\n    }\n\n    val requestAllMusicAccess: (Boolean) -> Unit = { pickFolderAfter ->\n        AppSettings.setLocalAllMusicEnabled(true)\n        if (LocalMediaRepository.hasStoragePermission(context)) {\n            refreshLocalCatalog()\n            if (pickFolderAfter) folderPicker.launch(null)\n        } else {\n            pickFolderAfterAudioPermission = pickFolderAfter\n            val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {\n                Manifest.permission.READ_MEDIA_AUDIO\n            } else {\n                Manifest.permission.READ_EXTERNAL_STORAGE\n            }\n            mediaPermissionLauncher.launch(permission)\n        }\n    }\n\n    val removeLocalMusicTree: (String) -> Unit = { treeUri ->\n        runCatching {\n            context.contentResolver.releasePersistableUriPermission(\n                Uri.parse(treeUri),\n                Intent.FLAG_GRANT_READ_URI_PERMISSION,\n            )\n        }\n        AppSettings.removeLocalMusicTreeUri(treeUri)\n        refreshLocalCatalog()\n    }\n\n    val handleLocalMusicSetupChoice: (LocalMusicSetupChoice) -> Unit = { choice ->\n        AppSettings.setLocalMusicSetupSeen(true)\n        val request = requestForSetupChoice(choice)\n        when {\n            request.enableAllMusic -> requestAllMusicAccess(request.pickFolder)\n            request.pickFolder -> folderPicker.launch(null)\n        }\n    }''',
+)
+replace_once(
+    main,
+    '''            if (id == "local:all" && !LocalMediaRepository.hasStoragePermission(context)) {\n                val perm = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {\n                    Manifest.permission.READ_MEDIA_AUDIO\n                } else {\n                    Manifest.permission.READ_EXTERNAL_STORAGE\n                }\n                mediaPermissionLauncher.launch(perm)\n            }''',
+    '''            if (\n                id == "local:all" &&\n                AppSettings.localAllMusicEnabled.value &&\n                !LocalMediaRepository.hasStoragePermission(context)\n            ) {\n                requestAllMusicAccess(false)\n            }''',
+)
+replace_once(
+    main,
+    '''        BackHandler(enabled = showSources) {\n            showSources = false\n        }\n        // One back step out of Settings, or out of any tab but Home, lands on\n        // Home rather than exiting — only Home itself hands back to the system,\n        // which is what actually closes/minimizes the app.\n        BackHandler(enabled = showSettings && !showAccountScrobbling && !showSources) {''',
+    '''        BackHandler(enabled = showSources) {\n            showSources = false\n        }\n        BackHandler(enabled = showLocalMusicSettings) {\n            showLocalMusicSettings = false\n        }\n        // One back step out of Settings, or out of any tab but Home, lands on\n        // Home rather than exiting — only Home itself hands back to the system,\n        // which is what actually closes/minimizes the app.\n        BackHandler(\n            enabled = showSettings && !showAccountScrobbling && !showSources && !showLocalMusicSettings,\n        ) {''',
+)
+replace_once(
+    main,
+    '''                        showAccountScrobbling -> "account_scrobbling"\n                        showSources -> "sources"\n                        // Above Replay, not below it.''',
+    '''                        showAccountScrobbling -> "account_scrobbling"\n                        showSources -> "sources"\n                        showLocalMusicSettings -> "local_music_settings"\n                        // Above Replay, not below it.''',
+)
+replace_once(
+    main,
+    '''                        it.browseId == key && key != "settings" && key != "account_scrobbling" &&\n                            key != "discord" && key != "replay" && key != "history" &&\n                            key != "library_show_all"''',
+    '''                        it.browseId == key && key != "settings" && key != "account_scrobbling" &&\n                            key != "discord" && key != "replay" && key != "history" &&\n                            key != "local_music_settings" && key != "library_show_all"''',
+)
+replace_once(
+    main,
+    '''                    } else if (key == "settings") {\n                        SettingsScreen(''',
+    '''                    } else if (key == "local_music_settings") {\n                        LocalMusicSettingsScreen(\n                            allMusicEnabled = localAllMusicEnabled,\n                            allMusicPermissionGranted = LocalMediaRepository.hasStoragePermission(context),\n                            treeUris = localMusicTreeUris.toList().sorted(),\n                            rescanStatus = localRescanStatus,\n                            onAllMusicChanged = { enabled ->\n                                if (enabled) {\n                                    requestAllMusicAccess(false)\n                                } else {\n                                    AppSettings.setLocalAllMusicEnabled(false)\n                                    refreshLocalCatalog()\n                                }\n                            },\n                            onAddFolder = { folderPicker.launch(null) },\n                            onRemoveFolder = removeLocalMusicTree,\n                            onRescan = refreshLocalCatalog,\n                            contentPadding = listPadding,\n                        )\n                    } else if (key == "settings") {\n                        SettingsScreen(''',
+)
+replace_once(
+    main,
+    '''                            onLyricsSources = { showLyricsSources = true },\n                            onSources = { showSources = true },\n                            onSpotifyCanvasAuth = { showSpotifyCanvasAuth = true },''',
+    '''                            onLyricsSources = { showLyricsSources = true },\n                            onSources = { showSources = true },\n                            onLocalMusic = { showLocalMusicSettings = true },\n                            onSpotifyCanvasAuth = { showSpotifyCanvasAuth = true },''',
+)
+replace_once(
+    main,
+    '''                        showAccountScrobbling -> "Account & scrobbling"\n                        showSources -> "Sources"\n                        showSettings -> "Settings"''',
+    '''                        showAccountScrobbling -> "Account & scrobbling"\n                        showSources -> "Sources"\n                        showLocalMusicSettings -> "Local Music"\n                        showSettings -> "Settings"''',
+)
+replace_once(
+    main,
+    '''                        showAccountScrobbling -> ({ showAccountScrobbling = false })\n                        showSources -> ({ showSources = false })\n                        showSettings -> ({ showSettings = false })''',
+    '''                        showAccountScrobbling -> ({ showAccountScrobbling = false })\n                        showSources -> ({ showSources = false })\n                        showLocalMusicSettings -> ({ showLocalMusicSettings = false })\n                        showSettings -> ({ showSettings = false })''',
+)
+replace_once(
+    main,
+    '''        // ---- Google sign-in (full screen WebView) ----\n        if (showLogin) {''',
+    '''        if (!localMusicSetupSeen && !showLogin) {\n            ModalBottomSheet(\n                onDismissRequest = { handleLocalMusicSetupChoice(LocalMusicSetupChoice.NOT_NOW) },\n                sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),\n            ) {\n                LocalMusicSetupSheet(\n                    onAllMusic = { handleLocalMusicSetupChoice(LocalMusicSetupChoice.ALL_MUSIC) },\n                    onChooseFolders = { handleLocalMusicSetupChoice(LocalMusicSetupChoice.CHOOSE_FOLDERS) },\n                    onUseBoth = { handleLocalMusicSetupChoice(LocalMusicSetupChoice.BOTH) },\n                    onNotNow = { handleLocalMusicSetupChoice(LocalMusicSetupChoice.NOT_NOW) },\n                )\n            }\n        }\n\n        // ---- Google sign-in (full screen WebView) ----\n        if (showLogin) {''',
 )
 
-insert = r'''
-    /**
-     * One catalog for both access modes. MediaStore rows are merged first so a
-     * file visible through both A and B keeps the stable MediaStore content URI.
-     */
-    suspend fun refresh(context: Context): LocalMusicCatalog = withContext(Dispatchers.IO) {
-        val allMusicRows = if (
-            AppSettings.localAllMusicEnabled.value && hasStoragePermission(context)
-        ) {
-            getLocalMusic(context).map(::mediaStoreTrack)
-        } else {
-            emptyList()
-        }
-
-        val selectedRows = AppSettings.localMusicTreeUris.value
-            .toList()
-            .sorted()
-            .flatMap { scanTree(context, it) }
-
-        LocalMusicCatalog.merge(allMusicRows, selectedRows).also { cachedCatalog = it }
-    }
-
-    suspend fun catalog(context: Context): LocalMusicCatalog =
-        cachedCatalog ?: refresh(context)
-
-    fun invalidate() {
-        cachedCatalog = null
-    }
-
-    private fun mediaStoreTrack(song: Song): LocalMusicTrack {
-        val parent = song.localPath
-            ?.substringBeforeLast('/', missingDelimiterValue = "")
-            ?.takeIf { it.isNotBlank() }
-            ?: "On device"
-        val label = parent.substringAfterLast('/').ifBlank { "On device" }
-        return LocalMusicTrack(
-            song = song,
-            folderKey = parent,
-            folderLabel = label,
-            identity = identityFor(song),
-        )
-    }
-
-    /** Scan one persisted Storage Access Framework tree without broad file access. */
-    private fun scanTree(context: Context, treeUriString: String): List<LocalMusicTrack> {
-        val treeUri = runCatching { Uri.parse(treeUriString) }.getOrNull() ?: return emptyList()
-        val hasGrant = context.contentResolver.persistedUriPermissions.any {
-            it.uri == treeUri && it.isReadPermission
-        }
-        if (!hasGrant) return emptyList()
-
-        val root = runCatching { DocumentFile.fromTreeUri(context, treeUri) }
-            .getOrNull() ?: return emptyList()
-        if (!root.exists() || !root.isDirectory) return emptyList()
-
-        val rows = mutableListOf<LocalMusicTrack>()
-        val rootLabel = root.name?.takeIf { it.isNotBlank() } ?: "Selected folder"
-
-        fun visit(directory: DocumentFile, path: String) {
-            val children = runCatching { directory.listFiles().toList() }
-                .getOrElse {
-                    Log.w(TAG, "Cannot read selected music folder $path: ${it.message}")
-                    return
-                }
-            children.sortedBy { it.name.orEmpty().lowercase(Locale.ROOT) }.forEach { child ->
-                val name = child.name.orEmpty()
-                when {
-                    child.isDirectory -> {
-                        val nextLabel = name.ifBlank { "Folder" }
-                        visit(child, "$path/$nextLabel")
-                    }
-                    child.isFile && (
-                        child.type?.startsWith("audio/", ignoreCase = true) == true ||
-                            isAudioFileName(name)
-                    ) -> {
-                        val uri = child.uri.toString()
-                        val song = buildSongFromUri(
-                            context = context,
-                            uriStr = uri,
-                            fileName = name.ifBlank { "Audio" },
-                        ).copy(localPath = "$path/${name.ifBlank { "Audio" }}")
-                        rows += LocalMusicTrack(
-                            song = song,
-                            folderKey = path,
-                            folderLabel = path.substringAfterLast('/').ifBlank { rootLabel },
-                            identity = identityFor(song),
-                        )
-                    }
-                }
-            }
-        }
-
-        runCatching { visit(root, rootLabel) }
-            .onFailure { Log.w(TAG, "Failed scanning selected music tree: ${it.message}") }
-        return rows
-    }
-
-    /**
-     * A and B can expose the same physical file through different content URIs.
-     * Tags + duration give us a provider-independent identity without asking for
-     * filesystem-wide path access. The first occurrence wins during merge.
-     */
-    private fun identityFor(song: Song): String = listOf(
-        song.title.trim().lowercase(Locale.ROOT),
-        song.artist.trim().lowercase(Locale.ROOT),
-        song.albumName.orEmpty().trim().lowercase(Locale.ROOT),
-        song.durationText.orEmpty().trim(),
-    ).joinToString("|")
-
-'''
-replace_once(
-    repo,
-    '''    private fun isAudioFileName(name: String): Boolean {''',
-    insert + '''    private fun isAudioFileName(name: String): Boolean {''',
-)
-
-Path("/tmp/tantov-commit-message").write_text("feat(local): merge MediaStore and folder music\n")
+Path("/tmp/tantov-commit-message").write_text("feat(local): add first-run and settings access flow\n")
