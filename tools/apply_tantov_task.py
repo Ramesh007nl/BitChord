@@ -10,26 +10,154 @@ def replace_once(path: str, old: str, new: str) -> None:
     p.write_text(text.replace(old, new, 1))
 
 
-# Task 6: combine online + local Songs search with local offline fallback.
-view_model = "app/src/main/java/com/music/bitchord/ui/MainViewModel.kt"
+# Task 7: Android Auto Local Music browse + combined online/local search.
+local_source = Path("app/src/main/java/com/music/bitchord/playback/AndroidAutoLocalDataSource.kt")
+local_source.write_text(
+    '''package com.music.bitchord.playback
 
-replace_once(
-    view_model,
-    '''import java.util.Locale\n\nclass MainViewModel(app: Application) : AndroidViewModel(app) {''',
-    '''import java.util.Locale\n\n/**\n * Combines the normal online result page with local-device song matches.\n *\n * Online rows stay first so existing search ranking is preserved. Local songs\n * are still a useful result when the network is unavailable; only an online\n * failure with no local matches remains a failure.\n */\ninternal fun mergeSongSearchResults(\n    online: Result<List<SearchResult>>,\n    local: List<Song>,\n): Result<List<SearchResult>> {\n    val localRows = local.map(SearchResult::Track)\n    val onlineRows = online.getOrNull()\n    if (onlineRows == null && localRows.isEmpty()) {\n        return Result.failure(\n            online.exceptionOrNull() ?: IllegalStateException("Search failed"),\n        )\n    }\n\n    val merged = (onlineRows.orEmpty() + localRows).distinctBy { result ->\n        when (result) {\n            is SearchResult.Track -> result.song.localUri ?: result.song.videoId\n            is SearchResult.Browse -> "browse:${result.item.browseId}"\n        }\n    }\n    return Result.success(merged)\n}\n\nclass MainViewModel(app: Application) : AndroidViewModel(app) {''',
+import android.content.Context
+import com.music.bitchord.data.LocalMediaRepository
+import com.music.bitchord.data.local.LocalMusicCatalog
+import com.music.bitchord.data.model.Song
+
+/** Device-local seam for Android Auto, kept injectable so car browsing stays unit-testable. */
+interface AndroidAutoLocalDataSource {
+    suspend fun catalog(): LocalMusicCatalog
+    suspend fun search(query: String): List<Song>
+}
+
+object EmptyAndroidAutoLocalDataSource : AndroidAutoLocalDataSource {
+    override suspend fun catalog() = LocalMusicCatalog(emptyList())
+    override suspend fun search(query: String) = emptyList<Song>()
+}
+
+class DeviceAndroidAutoLocalDataSource(context: Context) : AndroidAutoLocalDataSource {
+    private val appContext = context.applicationContext
+
+    override suspend fun catalog(): LocalMusicCatalog = LocalMediaRepository.catalog(appContext)
+
+    override suspend fun search(query: String): List<Song> = catalog().search(query)
+}
+'''
 )
 
+ids = "app/src/main/java/com/music/bitchord/playback/AndroidAutoMediaIds.kt"
 replace_once(
-    view_model,
-    '''                // Search is YouTube's alone. A module is a *substitution*\n                // layer, not a catalogue to browse: it never has cover art,\n                // radio, related tracks or an album page, so its rows arrived\n                // in the results list looking like YouTube's and then behaved\n                // nothing like them. Every track found here takes the ordinary\n                // YouTube path and is handed to the module at playback time —\n                // see [SourceResolver.substituteForYouTube] — which upgrades\n                // the ones it holds without any of them having to be a\n                // separate row to pick between.\n                val result = YtMusicRepository.search(request.query, request.filter)\n                // A search that has been superseded shouldn't land on screen,\n                // whether it succeeded or failed.\n                if (request.requestId != newestRequestId.get()) return@collectLatest\n                _results.value = result.fold(\n                    onSuccess = { rows -> published(rows, key) },\n                    onFailure = { failure -> UiState.Error(failure.friendly()) },\n                )''',
-    '''                // Online search remains the primary catalogue. The Songs\n                // filter additionally searches the merged A+B local catalog;\n                // browse-shaped filters (albums, artists, playlists) stay\n                // online-only. A local match also gives search an offline\n                // fallback when the network request fails.\n                val online = YtMusicRepository.search(request.query, request.filter)\n                val localSongs = if (request.filter == SearchFilter.SONGS) {\n                    runCatching {\n                        LocalMediaRepository.catalog(getApplication<Application>())\n                            .search(request.query)\n                    }.getOrDefault(emptyList())\n                } else {\n                    emptyList()\n                }\n                val result = if (request.filter == SearchFilter.SONGS) {\n                    mergeSongSearchResults(online, localSongs)\n                } else {\n                    online\n                }\n\n                // A search that has been superseded shouldn't land on screen,\n                // whether it succeeded or failed.\n                if (request.requestId != newestRequestId.get()) return@collectLatest\n                _results.value = result.fold(\n                    onSuccess = { rows -> published(rows, key) },\n                    onFailure = { failure -> UiState.Error(failure.friendly()) },\n                )''',
+    ids,
+    '''    data object Library : AndroidAutoRoute\n    data class LibrarySection(val section: AndroidAutoLibrarySection) : AndroidAutoRoute''',
+    '''    data object Library : AndroidAutoRoute\n    data object LocalMusic : AndroidAutoRoute\n    data class LocalSection(val section: AndroidAutoLocalSection) : AndroidAutoRoute\n    data class LocalCollection(\n        val kind: AndroidAutoLocalCollectionKind,\n        val key: String,\n    ) : AndroidAutoRoute\n    data class LibrarySection(val section: AndroidAutoLibrarySection) : AndroidAutoRoute''',
+)
+replace_once(
+    ids,
+    '''enum class AndroidAutoLibrarySection {\n    LIKED,''',
+    '''enum class AndroidAutoLocalSection { SONGS, FOLDERS, ALBUMS, ARTISTS }\n\nenum class AndroidAutoLocalCollectionKind { FOLDER, ALBUM, ARTIST }\n\nenum class AndroidAutoLibrarySection {\n    LIKED,''',
+)
+replace_once(ids, 'private const val PREFIX = "bitchord:auto:v1"', 'private const val PREFIX = "tantov:auto:v1"')
+replace_once(
+    ids,
+    '''        AndroidAutoRoute.Library -> "$PREFIX:library"\n        is AndroidAutoRoute.LibrarySection ->''',
+    '''        AndroidAutoRoute.Library -> "$PREFIX:library"\n        AndroidAutoRoute.LocalMusic -> "$PREFIX:local"\n        is AndroidAutoRoute.LocalSection -> "$PREFIX:local-section:${route.section.name.lowercase()}"\n        is AndroidAutoRoute.LocalCollection -> "$PREFIX:local-collection:${route.kind.name.lowercase()}:${payload(route.key)}"\n        is AndroidAutoRoute.LibrarySection ->''',
+)
+replace_once(
+    ids,
+    '''        if (parts.size < 4 || parts[0] != "bitchord" || parts[1] != "auto" || parts[2] != "v1") return null''',
+    '''        if (parts.size < 4 || parts[0] != "tantov" || parts[1] != "auto" || parts[2] != "v1") return null''',
+)
+replace_once(
+    ids,
+    '''                "library" -> AndroidAutoRoute.Library.takeIf { parts.size == 4 }\n                "library-section" -> {''',
+    '''                "library" -> AndroidAutoRoute.Library.takeIf { parts.size == 4 }\n                "local" -> AndroidAutoRoute.LocalMusic.takeIf { parts.size == 4 }\n                "local-section" -> {\n                    if (parts.size != 5) null\n                    else AndroidAutoLocalSection.entries\n                        .firstOrNull { it.name.equals(parts[4], ignoreCase = true) }\n                        ?.let(AndroidAutoRoute::LocalSection)\n                }\n                "local-collection" -> {\n                    if (parts.size != 6) null\n                    else {\n                        val kind = AndroidAutoLocalCollectionKind.entries\n                            .firstOrNull { it.name.equals(parts[4], ignoreCase = true) }\n                            ?: return@runCatching null\n                        val key = decodePayload(parts[5]) ?: return@runCatching null\n                        key.takeIf(String::isNotBlank)?.let { AndroidAutoRoute.LocalCollection(kind, it) }\n                    }\n                }\n                "library-section" -> {''',
 )
 
-screen = "app/src/main/java/com/music/bitchord/ui/screens/SearchScreen.kt"
+catalog = "app/src/main/java/com/music/bitchord/playback/AndroidAutoCatalog.kt"
 replace_once(
-    screen,
-    '''                            is SearchResult.Track -> SongRow(\n                                song = row.song,\n                                onClick = {\n                                    onSongClick(tracks, tracks.indexOf(row.song).coerceAtLeast(0))\n                                },\n                                onLongPress = { onSongLongPress(row.song) },\n                                onSwipeToQueue = { onSongSwipe(row.song) },\n                            )''',
-    '''                            is SearchResult.Track -> {\n                                // Keep the real Song untouched for playback and\n                                // actions; only the search row's subtitle gains\n                                // the local-source marker.\n                                val displaySong = if (row.song.localUri != null) {\n                                    row.song.copy(\n                                        artist = listOf(row.song.artist, "On device")\n                                            .filter { it.isNotBlank() }\n                                            .joinToString(" • "),\n                                    )\n                                } else {\n                                    row.song\n                                }\n                                SongRow(\n                                    song = displaySong,\n                                    onClick = {\n                                        onSongClick(tracks, tracks.indexOf(row.song).coerceAtLeast(0))\n                                    },\n                                    onLongPress = { onSongLongPress(row.song) },\n                                    onSwipeToQueue = { onSongSwipe(row.song) },\n                                )\n                            }''',
+    catalog,
+    '''class AndroidAutoCatalog(\n    private val dataSource: AndroidAutoDataSource,\n    private val nowMs: () -> Long = System::currentTimeMillis,\n) {''',
+    '''class AndroidAutoCatalog(\n    private val dataSource: AndroidAutoDataSource,\n    private val localDataSource: AndroidAutoLocalDataSource = EmptyAndroidAutoLocalDataSource,\n    private val nowMs: () -> Long = System::currentTimeMillis,\n) {''',
+)
+replace_once(
+    catalog,
+    '''            AndroidAutoRoute.Recent -> if (dataSource.isSignedIn()) historyRows() else emptyList()\n            AndroidAutoRoute.Library -> if (dataSource.isSignedIn()) libraryFolders() else emptyList()\n            is AndroidAutoRoute.LibrarySection -> if (dataSource.isSignedIn()) {\n                librarySectionRows(route.section)\n            } else {\n                emptyList()\n            }\n            is AndroidAutoRoute.Shelf -> shelfRows(route)\n            is AndroidAutoRoute.Collection -> collectionRows(route)\n            is AndroidAutoRoute.Track -> emptyList()''',
+    '''            AndroidAutoRoute.Recent -> if (dataSource.isSignedIn()) historyRows() else emptyList()\n            AndroidAutoRoute.Library -> libraryFolders()\n            AndroidAutoRoute.LocalMusic -> localMusicSections()\n            is AndroidAutoRoute.LocalSection -> localSectionRows(route.section)\n            is AndroidAutoRoute.LocalCollection -> localCollectionRows(route)\n            is AndroidAutoRoute.LibrarySection -> if (dataSource.isSignedIn()) {\n                librarySectionRows(route.section)\n            } else {\n                emptyList()\n            }\n            is AndroidAutoRoute.Shelf -> shelfRows(route)\n            is AndroidAutoRoute.Collection -> collectionRows(route)\n            is AndroidAutoRoute.Track -> emptyList()''',
+)
+replace_once(
+    catalog,
+    '''            AndroidAutoRoute.Recent -> browsable(route, "Recently Played")\n            AndroidAutoRoute.Library -> browsable(route, "Library")\n            is AndroidAutoRoute.LibrarySection -> browsable(route, librarySectionTitle(route.section))\n            is AndroidAutoRoute.Collection,\n            is AndroidAutoRoute.Shelf,\n            is AndroidAutoRoute.Track,\n            -> error("Unknown dynamic Android Auto item")''',
+    '''            AndroidAutoRoute.Recent -> browsable(route, "Recently Played")\n            AndroidAutoRoute.Library -> browsable(route, "Library")\n            AndroidAutoRoute.LocalMusic -> browsable(route, "Local Music")\n            is AndroidAutoRoute.LocalSection -> browsable(route, localSectionTitle(route.section))\n            is AndroidAutoRoute.LibrarySection -> browsable(route, librarySectionTitle(route.section))\n            is AndroidAutoRoute.LocalCollection,\n            is AndroidAutoRoute.Collection,\n            is AndroidAutoRoute.Shelf,\n            is AndroidAutoRoute.Track,\n            -> error("Unknown dynamic Android Auto item")''',
+)
+replace_once(
+    catalog,
+    '''        val route = AndroidAutoMediaIds.parse(incoming.mediaId) as? AndroidAutoRoute.Track\n            ?: error("Not a BitChord Android Auto track")''',
+    '''        val route = AndroidAutoMediaIds.parse(incoming.mediaId) as? AndroidAutoRoute.Track\n            ?: error("Not a TanTov Android Auto track")''',
+)
+replace_once(
+    catalog,
+    '''            val trackResults = dataSource.search(clean, SearchFilter.SONGS).getOrThrow()\n            val browseResults = coroutineScope {\n                SEARCH_FILTERS.drop(1)\n                    .map { filter -> async { dataSource.search(clean, filter).getOrThrow() } }\n                    .awaitAll()\n                    .flatten()\n            }\n            val rows = (trackResults + browseResults).map { result ->\n                when (result) {\n                    is SearchResult.Track -> playableRow(result.song)\n                    is SearchResult.Browse -> collectionRow(result.item)\n                }\n            }.distinctBy { it.mediaId }\n            searchCache[cacheKey] = CacheEntry(rows, nowMs())\n            rows''',
+    '''            // Online and local are independent: losing the network must not\n            // erase an on-device match, and a local scan problem must not hide\n            // healthy online results. The existing four-filter online search is\n            // kept intact, including concurrent browse-filter requests.\n            val onlineRows = runCatching {\n                val trackResults = dataSource.search(clean, SearchFilter.SONGS).getOrThrow()\n                val browseResults = coroutineScope {\n                    SEARCH_FILTERS.drop(1)\n                        .map { filter -> async { dataSource.search(clean, filter).getOrThrow() } }\n                        .awaitAll()\n                        .flatten()\n                }\n                (trackResults + browseResults).map { result ->\n                    when (result) {\n                        is SearchResult.Track -> playableRow(result.song)\n                        is SearchResult.Browse -> collectionRow(result.item)\n                    }\n                }\n            }\n            val localRows = runCatching {\n                localDataSource.search(clean).map(::playableRow)\n            }.getOrDefault(emptyList())\n\n            val rows = onlineRows.fold(\n                onSuccess = { online -> (online + localRows).distinctBy { it.mediaId } },\n                onFailure = { failure ->\n                    if (localRows.isNotEmpty()) localRows.distinctBy { it.mediaId }\n                    else throw failure\n                },\n            )\n            searchCache[cacheKey] = CacheEntry(rows, nowMs())\n            rows''',
+)
+replace_once(
+    catalog,
+    '''        allowedCollections.clear()\n        rememberedSongs.clear()''',
+    '''        allowedCollections.clear()\n        rememberedSongs.clear()''',
+)
+replace_once(
+    catalog,
+    '''    private suspend fun libraryFolders(): List<MediaItem> {\n        val page = library()\n        return buildList {\n            if (page.likedSongs.isNotEmpty()) {\n                add(browsable(AndroidAutoRoute.LibrarySection(AndroidAutoLibrarySection.LIKED), "Liked Songs"))\n            }\n            if (page.librarySongs.isNotEmpty()) {\n                add(browsable(AndroidAutoRoute.LibrarySection(AndroidAutoLibrarySection.SONGS), "Songs"))\n            }\n            LIBRARY_SHELVES.forEach { (section, title) ->\n                if (page.shelves.firstOrNull { it.title.equals(title, ignoreCase = true) }?.items?.isNotEmpty() == true) {\n                    add(browsable(AndroidAutoRoute.LibrarySection(section), title))\n                }\n            }\n        }\n    }''',
+    '''    private suspend fun libraryFolders(): List<MediaItem> = buildList {\n        // Local Music is independent of YouTube authentication. A signed-out\n        // driver can still browse and play the music already on the phone.\n        val local = runCatching { localDataSource.catalog() }.getOrNull()\n        if (local?.songs?.isNotEmpty() == true) {\n            add(browsable(AndroidAutoRoute.LocalMusic, "Local Music"))\n        }\n\n        if (!dataSource.isSignedIn()) return@buildList\n        val page = library()\n        if (page.likedSongs.isNotEmpty()) {\n            add(browsable(AndroidAutoRoute.LibrarySection(AndroidAutoLibrarySection.LIKED), "Liked Songs"))\n        }\n        if (page.librarySongs.isNotEmpty()) {\n            add(browsable(AndroidAutoRoute.LibrarySection(AndroidAutoLibrarySection.SONGS), "Songs"))\n        }\n        LIBRARY_SHELVES.forEach { (section, title) ->\n            if (page.shelves.firstOrNull { it.title.equals(title, ignoreCase = true) }?.items?.isNotEmpty() == true) {\n                add(browsable(AndroidAutoRoute.LibrarySection(section), title))\n            }\n        }\n    }\n\n    private fun localMusicSections(): List<MediaItem> = AndroidAutoLocalSection.entries.map { section ->\n        browsable(AndroidAutoRoute.LocalSection(section), localSectionTitle(section))\n    }\n\n    private suspend fun localSectionRows(section: AndroidAutoLocalSection): List<MediaItem> {\n        val local = localDataSource.catalog()\n        return when (section) {\n            AndroidAutoLocalSection.SONGS -> local.songs.map(::playableRow)\n            AndroidAutoLocalSection.FOLDERS -> local.folders.map { folder ->\n                browsable(\n                    AndroidAutoRoute.LocalCollection(AndroidAutoLocalCollectionKind.FOLDER, folder.key),\n                    folder.label,\n                    "${folder.songs.size} songs",\n                    folder.songs.firstOrNull()?.thumbnailUrl,\n                )\n            }\n            AndroidAutoLocalSection.ALBUMS -> local.songs\n                .mapNotNull { song ->\n                    song.albumName?.trim()?.takeIf { it.isNotBlank() }?.let { it to song }\n                }\n                .groupBy({ it.first }, { it.second })\n                .toSortedMap(String.CASE_INSENSITIVE_ORDER)\n                .map { (album, songs) ->\n                    val artists = songs.map { it.artist }.filter { it.isNotBlank() }.distinct()\n                    browsable(\n                        AndroidAutoRoute.LocalCollection(AndroidAutoLocalCollectionKind.ALBUM, album),\n                        album,\n                        artists.joinToString(" • "),\n                        songs.firstOrNull()?.thumbnailUrl,\n                    )\n                }\n            AndroidAutoLocalSection.ARTISTS -> local.songs\n                .filter { it.artist.isNotBlank() }\n                .groupBy { it.artist.trim() }\n                .toSortedMap(String.CASE_INSENSITIVE_ORDER)\n                .map { (artist, songs) ->\n                    browsable(\n                        AndroidAutoRoute.LocalCollection(AndroidAutoLocalCollectionKind.ARTIST, artist),\n                        artist,\n                        "${songs.size} songs",\n                        songs.firstOrNull()?.thumbnailUrl,\n                    )\n                }\n        }\n    }\n\n    private suspend fun localCollectionRows(route: AndroidAutoRoute.LocalCollection): List<MediaItem> {\n        val routeId = AndroidAutoMediaIds.encode(route)\n        require(routeId in allowedCollections) { "Unknown Android Auto local collection" }\n        val local = localDataSource.catalog()\n        val songs = when (route.kind) {\n            AndroidAutoLocalCollectionKind.FOLDER ->\n                local.folders.firstOrNull { it.key == route.key }?.songs.orEmpty()\n            AndroidAutoLocalCollectionKind.ALBUM ->\n                local.songs.filter { it.albumName?.trim() == route.key }\n            AndroidAutoLocalCollectionKind.ARTIST ->\n                local.songs.filter { it.artist.trim() == route.key }\n        }\n        return songs.map(::playableRow)\n    }''',
+)
+replace_once(
+    catalog,
+    '''        if (route is AndroidAutoRoute.Collection) allowedCollections += id''',
+    '''        if (route is AndroidAutoRoute.Collection || route is AndroidAutoRoute.LocalCollection) {\n            allowedCollections += id\n        }''',
+)
+replace_once(
+    catalog,
+    '''            putString(EXTRA_ALBUM_ID, song.albumId)\n            putString(EXTRA_THUMBNAIL, song.thumbnailUrl)''',
+    '''            putString(EXTRA_ALBUM_ID, song.albumId)\n            putString(EXTRA_THUMBNAIL, song.thumbnailUrl)\n            putString(EXTRA_LOCAL_URI, song.localUri)\n            putString(EXTRA_LOCAL_PATH, song.localPath)''',
+)
+replace_once(
+    catalog,
+    '''            .setIsPlayable(true)\n            .setIsBrowsable(false)\n            .setExtras(extras)\n            .apply {\n                song.albumName?.let(::setAlbumTitle)''',
+    '''            .setIsPlayable(true)\n            .setIsBrowsable(false)\n            .setExtras(extras)\n            .apply {\n                if (song.localUri != null) {\n                    setDescription(\n                        listOf(song.artist, "On device")\n                            .filter { it.isNotBlank() }\n                            .joinToString(" • "),\n                    )\n                }\n                song.albumName?.let(::setAlbumTitle)''',
+)
+replace_once(
+    catalog,
+    '''            albumId = extras?.getString(EXTRA_ALBUM_ID),\n            albumName = item.mediaMetadata.albumTitle?.toString(),\n        )''',
+    '''            albumId = extras?.getString(EXTRA_ALBUM_ID),\n            albumName = item.mediaMetadata.albumTitle?.toString(),\n            localUri = extras?.getString(EXTRA_LOCAL_URI),\n            localPath = extras?.getString(EXTRA_LOCAL_PATH),\n        )''',
+)
+replace_once(
+    catalog,
+    '''    private fun librarySectionTitle(section: AndroidAutoLibrarySection): String = when (section) {''',
+    '''    private fun localSectionTitle(section: AndroidAutoLocalSection): String = when (section) {\n        AndroidAutoLocalSection.SONGS -> "Songs"\n        AndroidAutoLocalSection.FOLDERS -> "Folders"\n        AndroidAutoLocalSection.ALBUMS -> "Albums"\n        AndroidAutoLocalSection.ARTISTS -> "Artists"\n    }\n\n    private fun librarySectionTitle(section: AndroidAutoLibrarySection): String = when (section) {''',
+)
+replace_once(
+    catalog,
+    '''        private const val EXTRA_ALBUM_ID = "bitchord.auto.albumId"\n        private const val EXTRA_THUMBNAIL = "bitchord.auto.thumbnailUrl"''',
+    '''        private const val EXTRA_ALBUM_ID = "bitchord.auto.albumId"\n        private const val EXTRA_THUMBNAIL = "bitchord.auto.thumbnailUrl"\n        private const val EXTRA_LOCAL_URI = "tantov.auto.localUri"\n        private const val EXTRA_LOCAL_PATH = "tantov.auto.localPath"''',
 )
 
-Path("/tmp/tantov-commit-message").write_text("feat(search): combine online and local music\n")
+service = "app/src/main/java/com/music/bitchord/playback/PlaybackService.kt"
+replace_once(
+    service,
+    '''    private var mediaSession: MediaLibrarySession? = null\n    private val androidAutoCatalog by lazy { AndroidAutoCatalog(YtMusicAndroidAutoDataSource) }''',
+    '''    private var mediaSession: MediaLibrarySession? = null\n    private val androidAutoCatalog by lazy {\n        AndroidAutoCatalog(\n            dataSource = YtMusicAndroidAutoDataSource,\n            localDataSource = DeviceAndroidAutoLocalDataSource(this),\n        )\n    }''',
+)
+
+# Existing tests should assert against the new TanTov car-ID namespace.
+for test_path in [
+    "app/src/test/java/com/music/bitchord/AndroidAutoCatalogTest.kt",
+    "app/src/test/java/com/music/bitchord/AndroidAutoVoiceSearchTest.kt",
+]:
+    p = Path(test_path)
+    text = p.read_text()
+    if 'startsWith("bitchord:auto:")' in text:
+        p.write_text(text.replace('startsWith("bitchord:auto:")', 'startsWith("tantov:auto:")'))
+
+media_ids_test = "app/src/test/java/com/music/bitchord/AndroidAutoMediaIdsTest.kt"
+replace_once(
+    media_ids_test,
+    '''        assertNull(AndroidAutoMediaIds.parse("bitchord:auto:v1:track:"))''',
+    '''        assertNull(AndroidAutoMediaIds.parse("bitchord:auto:v1:track:"))\n        assertNull(AndroidAutoMediaIds.parse("tantov:auto:v1:track:"))''',
+)
+
+Path("/tmp/tantov-commit-message").write_text("feat(auto): browse and search local music")
