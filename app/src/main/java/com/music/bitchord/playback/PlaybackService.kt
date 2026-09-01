@@ -290,9 +290,9 @@ class PlaybackService : MediaLibraryService() {
             session: MediaLibrarySession,
             browser: MediaSession.ControllerInfo,
             params: LibraryParams?,
-        ): ListenableFuture<LibraryResult<MediaItem>> = scope.future {
-            LibraryResult.ofItem(androidAutoCatalog.root(), params)
-        }
+        ): ListenableFuture<LibraryResult<MediaItem>> = Futures.immediateFuture(
+            LibraryResult.ofItem(androidAutoCatalog.root(), params),
+        )
 
         override fun onGetChildren(
             session: MediaLibrarySession,

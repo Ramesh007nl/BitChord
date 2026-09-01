@@ -46,7 +46,7 @@ class AndroidAutoCatalog(
     private val rememberedSongs = mutableMapOf<String, Song>()
     private val rememberedItems = mutableMapOf<String, MediaItem>()
 
-    suspend fun root(): MediaItem = browsable(AndroidAutoRoute.Root, "BitChord")
+    fun root(): MediaItem = browsable(AndroidAutoRoute.Root, "BitChord")
 
     suspend fun children(
         route: AndroidAutoRoute,
