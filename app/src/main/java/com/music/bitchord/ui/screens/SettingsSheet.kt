@@ -143,6 +143,7 @@ fun SettingsScreen(
     onOpenReplay: () -> Unit,
     onLyricsSources: () -> Unit,
     onSources: () -> Unit,
+    onLocalMusic: () -> Unit,
     onSpotifyCanvasAuth: () -> Unit,
     onAppLanguage: () -> Unit,
     contentPadding: PaddingValues,
@@ -268,6 +269,15 @@ fun SettingsScreen(
                 subtitle = account?.email?.takeIf { it.isNotBlank() }
                     ?: if (signedIn) "Signed in" else "Not signed in",
                 onClick = onAccountScrobbling,
+            )
+        }
+
+        SettingsGroup(header = "Library") {
+            SettingsRow(
+                icon = Icons.Rounded.Storage,
+                title = "Local Music",
+                subtitle = "All Music, selected folders and rescan",
+                onClick = onLocalMusic,
             )
         }
 

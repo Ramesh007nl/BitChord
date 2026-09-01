@@ -91,6 +91,8 @@ import com.music.bitchord.auth.DiscordLoginScreen
 import com.music.bitchord.auth.YtMusicLoginScreen
 import com.music.bitchord.data.AppUpdateChecker
 import com.music.bitchord.data.LocalMediaRepository
+import com.music.bitchord.data.local.LocalMusicSetupChoice
+import com.music.bitchord.data.local.requestForSetupChoice
 import com.music.bitchord.data.NerdStats
 import com.music.bitchord.data.TrackLog
 import com.music.bitchord.data.innertube.InnertubeParser
@@ -160,6 +162,8 @@ import com.music.bitchord.ui.player.dockedPlayerAvailable
 import com.music.bitchord.ui.player.dockedPlayerWidth
 import com.music.bitchord.ui.screens.DetailScreen
 import com.music.bitchord.ui.screens.LocalMusicScreen
+import com.music.bitchord.ui.screens.LocalMusicSetupSheet
+import com.music.bitchord.ui.screens.LocalMusicSettingsScreen
 import com.music.bitchord.ui.screens.HomeScreen
 import com.music.bitchord.ui.screens.LibraryGridPage
 import com.music.bitchord.ui.screens.LibraryScreen
@@ -281,6 +285,7 @@ private fun BitChordApp(
     var replaySharePage by remember { mutableStateOf<ReplayStoryPage?>(null) }
     var showAccountScrobbling by remember { mutableStateOf(false) }
     var showSources by remember { mutableStateOf(false) }
+    var showLocalMusicSettings by remember { mutableStateOf(false) }
     var showSpotifyCanvasAuth by remember { mutableStateOf(false) }
     
     // Hosted here rather than inside SourcesScreen so its scrim covers the tab
@@ -385,6 +390,9 @@ private fun BitChordApp(
     val filter by viewModel.filter.collectAsStateWithLifecycle()
     val signedIn by viewModel.signedIn.collectAsStateWithLifecycle()
     val account by viewModel.account.collectAsStateWithLifecycle()
+    val localMusicSetupSeen by AppSettings.localMusicSetupSeen.collectAsStateWithLifecycle()
+    val localAllMusicEnabled by AppSettings.localAllMusicEnabled.collectAsStateWithLifecycle()
+    val localMusicTreeUris by AppSettings.localMusicTreeUris.collectAsStateWithLifecycle()
     val historyState by viewModel.history.collectAsStateWithLifecycle()
     val lyrics by viewModel.lyrics.collectAsStateWithLifecycle()
     val lyricsSource by viewModel.lyricsSource.collectAsStateWithLifecycle()
@@ -414,6 +422,7 @@ private fun BitChordApp(
     LaunchedEffect(showSettings) {
         if (!showSettings) {
             showAccountScrobbling = false
+            showLocalMusicSettings = false
         }
     }
 
@@ -902,26 +911,103 @@ private fun BitChordApp(
                 .show()
         }
     }
+    var localRescanStatus by remember { mutableStateOf<String?>(null) }
+    var pickFolderAfterAudioPermission by remember { mutableStateOf(false) }
+
+    val refreshLocalCatalog: () -> Unit = {
+        LocalMediaRepository.invalidate()
+        scope.launch {
+            runCatching { LocalMediaRepository.refresh(context) }
+                .onSuccess { catalog ->
+                    localRescanStatus = "${catalog.songs.size} songs"
+                    viewModel.reloadLocalDetail("local:all")
+                }
+                .onFailure { error ->
+                    localRescanStatus = "Rescan failed: ${error.message ?: "unknown error"}"
+                }
+        }
+    }
+
+    val folderPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree(),
+    ) { uri ->
+        if (uri != null) {
+            val persisted = runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                )
+            }.isSuccess
+            if (persisted) {
+                AppSettings.addLocalMusicTreeUri(uri.toString())
+                refreshLocalCatalog()
+            } else {
+                Toast.makeText(context, "Couldn't keep access to that folder", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     val mediaPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
         if (granted) {
-            viewModel.reloadLocalDetail("local:all")
+            AppSettings.setLocalAllMusicEnabled(true)
+            refreshLocalCatalog()
         } else {
-            Toast.makeText(context, "Storage permission is required to read local audio files", Toast.LENGTH_SHORT).show()
+            AppSettings.setLocalAllMusicEnabled(false)
+            Toast.makeText(context, "Audio permission was not granted", Toast.LENGTH_SHORT).show()
+        }
+        if (pickFolderAfterAudioPermission) {
+            pickFolderAfterAudioPermission = false
+            folderPicker.launch(null)
+        }
+    }
+
+    val requestAllMusicAccess: (Boolean) -> Unit = { pickFolderAfter ->
+        AppSettings.setLocalAllMusicEnabled(true)
+        if (LocalMediaRepository.hasStoragePermission(context)) {
+            refreshLocalCatalog()
+            if (pickFolderAfter) folderPicker.launch(null)
+        } else {
+            pickFolderAfterAudioPermission = pickFolderAfter
+            val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                Manifest.permission.READ_MEDIA_AUDIO
+            } else {
+                Manifest.permission.READ_EXTERNAL_STORAGE
+            }
+            mediaPermissionLauncher.launch(permission)
+        }
+    }
+
+    val removeLocalMusicTree: (String) -> Unit = { treeUri ->
+        runCatching {
+            context.contentResolver.releasePersistableUriPermission(
+                Uri.parse(treeUri),
+                Intent.FLAG_GRANT_READ_URI_PERMISSION,
+            )
+        }
+        AppSettings.removeLocalMusicTreeUri(treeUri)
+        refreshLocalCatalog()
+    }
+
+    val handleLocalMusicSetupChoice: (LocalMusicSetupChoice) -> Unit = { choice ->
+        AppSettings.setLocalMusicSetupSeen(true)
+        val request = requestForSetupChoice(choice)
+        when {
+            request.enableAllMusic -> requestAllMusicAccess(request.pickFolder)
+            request.pickFolder -> folderPicker.launch(null)
         }
     }
     // Shared by the Library tab itself and by a shelf's "Show all" page, so a
     // card opens the same way from either.
     val onLibraryItemClick: (ShelfItem) -> Unit = { item ->
         item.browseId?.let { id ->
-            if (id == "local:all" && !LocalMediaRepository.hasStoragePermission(context)) {
-                val perm = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    Manifest.permission.READ_MEDIA_AUDIO
-                } else {
-                    Manifest.permission.READ_EXTERNAL_STORAGE
-                }
-                mediaPermissionLauncher.launch(perm)
+            if (
+                id == "local:all" &&
+                AppSettings.localAllMusicEnabled.value &&
+                !LocalMediaRepository.hasStoragePermission(context)
+            ) {
+                requestAllMusicAccess(false)
             }
             // Left set rather than cleared: a card opened from a shelf's
             // "Show all" page stacks a detail page over it exactly as one
@@ -1261,10 +1347,15 @@ private fun BitChordApp(
         BackHandler(enabled = showSources) {
             showSources = false
         }
+        BackHandler(enabled = showLocalMusicSettings) {
+            showLocalMusicSettings = false
+        }
         // One back step out of Settings, or out of any tab but Home, lands on
         // Home rather than exiting — only Home itself hands back to the system,
         // which is what actually closes/minimizes the app.
-        BackHandler(enabled = showSettings && !showAccountScrobbling && !showSources) {
+        BackHandler(
+            enabled = showSettings && !showAccountScrobbling && !showSources && !showLocalMusicSettings,
+        ) {
             showSettings = false
             // Only when Settings was the whole of what was on screen. Opened
             // over Replay or over a release page, closing it reveals that again
@@ -1308,6 +1399,7 @@ private fun BitChordApp(
                         libraryShowAll != null && detail == null -> "library_show_all"
                         showAccountScrobbling -> "account_scrobbling"
                         showSources -> "sources"
+                        showLocalMusicSettings -> "local_music_settings"
                         // Above Replay, not below it. The top bar's account
                         // button sets `showSettings` from every page including
                         // this one, so with Replay winning the tie the button
@@ -1359,7 +1451,7 @@ private fun BitChordApp(
                     val live = detailStack.lastOrNull()?.takeIf {
                         it.browseId == key && key != "settings" && key != "account_scrobbling" &&
                             key != "discord" && key != "replay" && key != "history" &&
-                            key != "library_show_all"
+                            key != "local_music_settings" && key != "library_show_all"
                     }
                     // Held for the same reason, one step further on: a popped
                     // page is off the stack before it has finished animating
@@ -1454,6 +1546,25 @@ private fun BitChordApp(
                                 customModuleAlert = true
                             },
                         )
+                    } else if (key == "local_music_settings") {
+                        LocalMusicSettingsScreen(
+                            allMusicEnabled = localAllMusicEnabled,
+                            allMusicPermissionGranted = LocalMediaRepository.hasStoragePermission(context),
+                            treeUris = localMusicTreeUris.toList().sorted(),
+                            rescanStatus = localRescanStatus,
+                            onAllMusicChanged = { enabled ->
+                                if (enabled) {
+                                    requestAllMusicAccess(false)
+                                } else {
+                                    AppSettings.setLocalAllMusicEnabled(false)
+                                    refreshLocalCatalog()
+                                }
+                            },
+                            onAddFolder = { folderPicker.launch(null) },
+                            onRemoveFolder = removeLocalMusicTree,
+                            onRescan = refreshLocalCatalog,
+                            contentPadding = listPadding,
+                        )
                     } else if (key == "settings") {
                         SettingsScreen(
                             windowWidth = windowWidth,
@@ -1471,6 +1582,7 @@ private fun BitChordApp(
                             },
                             onLyricsSources = { showLyricsSources = true },
                             onSources = { showSources = true },
+                            onLocalMusic = { showLocalMusicSettings = true },
                             onSpotifyCanvasAuth = { showSpotifyCanvasAuth = true },
                             onAppLanguage = { showAppLanguage = true },
                             contentPadding = listPadding,
@@ -1789,6 +1901,7 @@ private fun BitChordApp(
                         libraryShowAll != null && detail == null -> libraryShowAll?.title.orEmpty()
                         showAccountScrobbling -> "Account & scrobbling"
                         showSources -> "Sources"
+                        showLocalMusicSettings -> "Local Music"
                         showSettings -> "Settings"
                         showReplay -> "Replay"
                         detail != null -> detail.title
@@ -1815,6 +1928,7 @@ private fun BitChordApp(
                         libraryShowAll != null && detail == null -> ({ libraryShowAll = null })
                         showAccountScrobbling -> ({ showAccountScrobbling = false })
                         showSources -> ({ showSources = false })
+                        showLocalMusicSettings -> ({ showLocalMusicSettings = false })
                         showSettings -> ({ showSettings = false })
                         showReplay -> ({ showReplay = false })
                         detail != null -> ({ viewModel.closeDetail(); Unit })
@@ -2294,6 +2408,20 @@ private fun BitChordApp(
                             scope.launch { Downloads.deleteCollection(context, id) }
                         }
                     },
+                )
+            }
+        }
+
+        if (!localMusicSetupSeen && !showLogin) {
+            ModalBottomSheet(
+                onDismissRequest = { handleLocalMusicSetupChoice(LocalMusicSetupChoice.NOT_NOW) },
+                sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            ) {
+                LocalMusicSetupSheet(
+                    onAllMusic = { handleLocalMusicSetupChoice(LocalMusicSetupChoice.ALL_MUSIC) },
+                    onChooseFolders = { handleLocalMusicSetupChoice(LocalMusicSetupChoice.CHOOSE_FOLDERS) },
+                    onUseBoth = { handleLocalMusicSetupChoice(LocalMusicSetupChoice.BOTH) },
+                    onNotNow = { handleLocalMusicSetupChoice(LocalMusicSetupChoice.NOT_NOW) },
                 )
             }
         }
