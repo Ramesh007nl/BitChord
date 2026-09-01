@@ -2,7 +2,7 @@ name: Android Auto Legacy Browser Smoke
 
 on:
   push:
-    branches: [feat/android-auto-full]
+    branches: [feat/android-auto-full, feat/tantov-music-v1]
   pull_request:
     branches: [main]
 
