@@ -119,7 +119,12 @@ const val ACTION_TOGGLE_SHUFFLE = "com.music.bitchord.action.TOGGLE_SHUFFLE"
 class PlaybackService : MediaLibraryService() {
 
     private var mediaSession: MediaLibrarySession? = null
-    private val androidAutoCatalog by lazy { AndroidAutoCatalog(YtMusicAndroidAutoDataSource) }
+    private val androidAutoCatalog by lazy {
+        AndroidAutoCatalog(
+            dataSource = YtMusicAndroidAutoDataSource,
+            localDataSource = DeviceAndroidAutoLocalDataSource(this),
+        )
+    }
 
     /**
      * The player the session is on. Swaps with [spare] at every crossfade — see

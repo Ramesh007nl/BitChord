@@ -30,6 +30,7 @@ import kotlinx.coroutines.coroutineScope
  */
 class AndroidAutoCatalog(
     private val dataSource: AndroidAutoDataSource,
+    private val localDataSource: AndroidAutoLocalDataSource = EmptyAndroidAutoLocalDataSource,
     private val nowMs: () -> Long = System::currentTimeMillis,
 ) {
     private data class CacheEntry<T>(val value: T, val storedAt: Long)
@@ -59,7 +60,10 @@ class AndroidAutoCatalog(
             AndroidAutoRoute.Home -> homeShelves()
             AndroidAutoRoute.Explore -> exploreShelves()
             AndroidAutoRoute.Recent -> if (dataSource.isSignedIn()) historyRows() else emptyList()
-            AndroidAutoRoute.Library -> if (dataSource.isSignedIn()) libraryFolders() else emptyList()
+            AndroidAutoRoute.Library -> libraryFolders()
+            AndroidAutoRoute.LocalMusic -> localMusicSections()
+            is AndroidAutoRoute.LocalSection -> localSectionRows(route.section)
+            is AndroidAutoRoute.LocalCollection -> localCollectionRows(route)
             is AndroidAutoRoute.LibrarySection -> if (dataSource.isSignedIn()) {
                 librarySectionRows(route.section)
             } else {
@@ -80,7 +84,10 @@ class AndroidAutoCatalog(
             AndroidAutoRoute.Explore -> browsable(route, "Explore")
             AndroidAutoRoute.Recent -> browsable(route, "Recently Played")
             AndroidAutoRoute.Library -> browsable(route, "Library")
+            AndroidAutoRoute.LocalMusic -> browsable(route, "Local Music")
+            is AndroidAutoRoute.LocalSection -> browsable(route, localSectionTitle(route.section))
             is AndroidAutoRoute.LibrarySection -> browsable(route, librarySectionTitle(route.section))
+            is AndroidAutoRoute.LocalCollection,
             is AndroidAutoRoute.Collection,
             is AndroidAutoRoute.Shelf,
             is AndroidAutoRoute.Track,
@@ -91,7 +98,7 @@ class AndroidAutoCatalog(
     /** Turn a browsed car row back into BitChord's normal playable MediaItem. */
     suspend fun playableTrack(incoming: MediaItem): Result<MediaItem> = runCatching {
         val route = AndroidAutoMediaIds.parse(incoming.mediaId) as? AndroidAutoRoute.Track
-            ?: error("Not a BitChord Android Auto track")
+            ?: error("Not a TanTov Android Auto track")
         val song = rememberedSongs[route.videoId]
             ?: songFromBrowseRow(incoming, route.videoId)
             ?: error("Track metadata is unavailable")
@@ -107,19 +114,36 @@ class AndroidAutoCatalog(
         val all = if (cached != null && nowMs() - cached.storedAt <= SEARCH_TTL_MS) {
             cached.value
         } else {
-            val trackResults = dataSource.search(clean, SearchFilter.SONGS).getOrThrow()
-            val browseResults = coroutineScope {
-                SEARCH_FILTERS.drop(1)
-                    .map { filter -> async { dataSource.search(clean, filter).getOrThrow() } }
-                    .awaitAll()
-                    .flatten()
-            }
-            val rows = (trackResults + browseResults).map { result ->
-                when (result) {
-                    is SearchResult.Track -> playableRow(result.song)
-                    is SearchResult.Browse -> collectionRow(result.item)
+            // Online and local are independent: losing the network must not
+            // erase an on-device match, and a local scan problem must not hide
+            // healthy online results. The existing four-filter online search is
+            // kept intact, including concurrent browse-filter requests.
+            val onlineRows = runCatching {
+                val trackResults = dataSource.search(clean, SearchFilter.SONGS).getOrThrow()
+                val browseResults = coroutineScope {
+                    SEARCH_FILTERS.drop(1)
+                        .map { filter -> async { dataSource.search(clean, filter).getOrThrow() } }
+                        .awaitAll()
+                        .flatten()
                 }
-            }.distinctBy { it.mediaId }
+                (trackResults + browseResults).map { result ->
+                    when (result) {
+                        is SearchResult.Track -> playableRow(result.song)
+                        is SearchResult.Browse -> collectionRow(result.item)
+                    }
+                }
+            }
+            val localRows = runCatching {
+                localDataSource.search(clean).map(::playableRow)
+            }.getOrDefault(emptyList())
+
+            val rows = onlineRows.fold(
+                onSuccess = { online -> (online + localRows).distinctBy { it.mediaId } },
+                onFailure = { failure ->
+                    if (localRows.isNotEmpty()) localRows.distinctBy { it.mediaId }
+                    else throw failure
+                },
+            )
             searchCache[cacheKey] = CacheEntry(rows, nowMs())
             rows
         }
@@ -200,21 +224,88 @@ class AndroidAutoCatalog(
 
     private suspend fun historyRows(): List<MediaItem> = history().map(::playableRow)
 
-    private suspend fun libraryFolders(): List<MediaItem> {
+    private suspend fun libraryFolders(): List<MediaItem> = buildList {
+        // Local Music is independent of YouTube authentication. A signed-out
+        // driver can still browse and play the music already on the phone.
+        val local = runCatching { localDataSource.catalog() }.getOrNull()
+        if (local?.songs?.isNotEmpty() == true) {
+            add(browsable(AndroidAutoRoute.LocalMusic, "Local Music"))
+        }
+
+        if (!dataSource.isSignedIn()) return@buildList
         val page = library()
-        return buildList {
-            if (page.likedSongs.isNotEmpty()) {
-                add(browsable(AndroidAutoRoute.LibrarySection(AndroidAutoLibrarySection.LIKED), "Liked Songs"))
-            }
-            if (page.librarySongs.isNotEmpty()) {
-                add(browsable(AndroidAutoRoute.LibrarySection(AndroidAutoLibrarySection.SONGS), "Songs"))
-            }
-            LIBRARY_SHELVES.forEach { (section, title) ->
-                if (page.shelves.firstOrNull { it.title.equals(title, ignoreCase = true) }?.items?.isNotEmpty() == true) {
-                    add(browsable(AndroidAutoRoute.LibrarySection(section), title))
-                }
+        if (page.likedSongs.isNotEmpty()) {
+            add(browsable(AndroidAutoRoute.LibrarySection(AndroidAutoLibrarySection.LIKED), "Liked Songs"))
+        }
+        if (page.librarySongs.isNotEmpty()) {
+            add(browsable(AndroidAutoRoute.LibrarySection(AndroidAutoLibrarySection.SONGS), "Songs"))
+        }
+        LIBRARY_SHELVES.forEach { (section, title) ->
+            if (page.shelves.firstOrNull { it.title.equals(title, ignoreCase = true) }?.items?.isNotEmpty() == true) {
+                add(browsable(AndroidAutoRoute.LibrarySection(section), title))
             }
         }
+    }
+
+    private fun localMusicSections(): List<MediaItem> = AndroidAutoLocalSection.entries.map { section ->
+        browsable(AndroidAutoRoute.LocalSection(section), localSectionTitle(section))
+    }
+
+    private suspend fun localSectionRows(section: AndroidAutoLocalSection): List<MediaItem> {
+        val local = localDataSource.catalog()
+        return when (section) {
+            AndroidAutoLocalSection.SONGS -> local.songs.map(::playableRow)
+            AndroidAutoLocalSection.FOLDERS -> local.folders.map { folder ->
+                browsable(
+                    AndroidAutoRoute.LocalCollection(AndroidAutoLocalCollectionKind.FOLDER, folder.key),
+                    folder.label,
+                    "${folder.songs.size} songs",
+                    folder.songs.firstOrNull()?.thumbnailUrl,
+                )
+            }
+            AndroidAutoLocalSection.ALBUMS -> local.songs
+                .mapNotNull { song ->
+                    song.albumName?.trim()?.takeIf { it.isNotBlank() }?.let { it to song }
+                }
+                .groupBy({ it.first }, { it.second })
+                .toSortedMap(String.CASE_INSENSITIVE_ORDER)
+                .map { (album, songs) ->
+                    val artists = songs.map { it.artist }.filter { it.isNotBlank() }.distinct()
+                    browsable(
+                        AndroidAutoRoute.LocalCollection(AndroidAutoLocalCollectionKind.ALBUM, album),
+                        album,
+                        artists.joinToString(" • "),
+                        songs.firstOrNull()?.thumbnailUrl,
+                    )
+                }
+            AndroidAutoLocalSection.ARTISTS -> local.songs
+                .filter { it.artist.isNotBlank() }
+                .groupBy { it.artist.trim() }
+                .toSortedMap(String.CASE_INSENSITIVE_ORDER)
+                .map { (artist, songs) ->
+                    browsable(
+                        AndroidAutoRoute.LocalCollection(AndroidAutoLocalCollectionKind.ARTIST, artist),
+                        artist,
+                        "${songs.size} songs",
+                        songs.firstOrNull()?.thumbnailUrl,
+                    )
+                }
+        }
+    }
+
+    private suspend fun localCollectionRows(route: AndroidAutoRoute.LocalCollection): List<MediaItem> {
+        val routeId = AndroidAutoMediaIds.encode(route)
+        require(routeId in allowedCollections) { "Unknown Android Auto local collection" }
+        val local = localDataSource.catalog()
+        val songs = when (route.kind) {
+            AndroidAutoLocalCollectionKind.FOLDER ->
+                local.folders.firstOrNull { it.key == route.key }?.songs.orEmpty()
+            AndroidAutoLocalCollectionKind.ALBUM ->
+                local.songs.filter { it.albumName?.trim() == route.key }
+            AndroidAutoLocalCollectionKind.ARTIST ->
+                local.songs.filter { it.artist.trim() == route.key }
+        }
+        return songs.map(::playableRow)
     }
 
     private suspend fun librarySectionRows(section: AndroidAutoLibrarySection): List<MediaItem> {
@@ -323,7 +414,9 @@ class AndroidAutoCatalog(
         artwork: String? = null,
     ): MediaItem {
         val id = AndroidAutoMediaIds.encode(route)
-        if (route is AndroidAutoRoute.Collection) allowedCollections += id
+        if (route is AndroidAutoRoute.Collection || route is AndroidAutoRoute.LocalCollection) {
+            allowedCollections += id
+        }
         val metadata = MediaMetadata.Builder()
             .setTitle(title)
             .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
@@ -351,6 +444,8 @@ class AndroidAutoCatalog(
             putString(EXTRA_ARTIST_ID, song.artistId)
             putString(EXTRA_ALBUM_ID, song.albumId)
             putString(EXTRA_THUMBNAIL, song.thumbnailUrl)
+            putString(EXTRA_LOCAL_URI, song.localUri)
+            putString(EXTRA_LOCAL_PATH, song.localPath)
         }
         val metadata = MediaMetadata.Builder()
             .setTitle(song.title)
@@ -360,6 +455,13 @@ class AndroidAutoCatalog(
             .setIsBrowsable(false)
             .setExtras(extras)
             .apply {
+                if (song.localUri != null) {
+                    setDescription(
+                        listOf(song.artist, "On device")
+                            .filter { it.isNotBlank() }
+                            .joinToString(" • "),
+                    )
+                }
                 song.albumName?.let(::setAlbumTitle)
                 song.artworkAt(NOTIFICATION_ART_PX)?.toUri()?.let(::setArtworkUri)
             }
@@ -384,7 +486,16 @@ class AndroidAutoCatalog(
             artistId = extras?.getString(EXTRA_ARTIST_ID),
             albumId = extras?.getString(EXTRA_ALBUM_ID),
             albumName = item.mediaMetadata.albumTitle?.toString(),
+            localUri = extras?.getString(EXTRA_LOCAL_URI),
+            localPath = extras?.getString(EXTRA_LOCAL_PATH),
         )
+    }
+
+    private fun localSectionTitle(section: AndroidAutoLocalSection): String = when (section) {
+        AndroidAutoLocalSection.SONGS -> "Songs"
+        AndroidAutoLocalSection.FOLDERS -> "Folders"
+        AndroidAutoLocalSection.ALBUMS -> "Albums"
+        AndroidAutoLocalSection.ARTISTS -> "Artists"
     }
 
     private fun librarySectionTitle(section: AndroidAutoLibrarySection): String = when (section) {
@@ -427,6 +538,8 @@ class AndroidAutoCatalog(
         private const val EXTRA_ARTIST_ID = "bitchord.auto.artistId"
         private const val EXTRA_ALBUM_ID = "bitchord.auto.albumId"
         private const val EXTRA_THUMBNAIL = "bitchord.auto.thumbnailUrl"
+        private const val EXTRA_LOCAL_URI = "tantov.auto.localUri"
+        private const val EXTRA_LOCAL_PATH = "tantov.auto.localPath"
 
         private val SEARCH_FILTERS = listOf(
             SearchFilter.SONGS,

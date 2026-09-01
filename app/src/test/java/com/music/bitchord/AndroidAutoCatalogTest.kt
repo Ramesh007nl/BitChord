@@ -103,7 +103,7 @@ class AndroidAutoCatalogTest {
 
         val playable = catalog.playableTrack(row).getOrThrow()
         assertEquals("vid1", playable.mediaId)
-        assertFalse(playable.mediaId.startsWith("bitchord:auto:"))
+        assertFalse(playable.mediaId.startsWith("tantov:auto:"))
         assertEquals("Track", playable.mediaMetadata.title.toString())
         assertEquals("Artist", playable.mediaMetadata.artist.toString())
     }

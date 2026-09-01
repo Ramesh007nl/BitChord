@@ -55,7 +55,7 @@ class AndroidAutoVoiceSearchTest {
         val playable = catalog.playableSearchResult("Rahman").getOrThrow()
 
         assertEquals("song-1", playable.mediaId)
-        assertFalse(playable.mediaId.startsWith("bitchord:auto:"))
+        assertFalse(playable.mediaId.startsWith("tantov:auto:"))
         assertEquals("Jai Ho", playable.mediaMetadata.title.toString())
     }
 }

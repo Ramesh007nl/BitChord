@@ -42,6 +42,7 @@ class AndroidAutoMediaIdsTest {
     fun malformedOrForeignIdsAreRejected() {
         assertNull(AndroidAutoMediaIds.parse("spotify:track:123"))
         assertNull(AndroidAutoMediaIds.parse("bitchord:auto:v1:track:"))
+        assertNull(AndroidAutoMediaIds.parse("tantov:auto:v1:track:"))
         assertNull(AndroidAutoMediaIds.parse("bitchord:auto:v1:shelf:home:not-a-number:YWJj"))
     }
 }
