@@ -121,6 +121,7 @@ import com.music.bitchord.playback.MusicLink
 import com.music.bitchord.playback.PlayerDeepLink
 import com.music.bitchord.playback.QueueBuilder
 import com.music.bitchord.playback.QueueShuffle
+import com.music.bitchord.playback.nextRepeatMode
 import com.music.bitchord.playback.autoplaySectionStart
 import com.music.bitchord.playback.playSongs
 import com.music.bitchord.playback.toMediaItem
@@ -1260,11 +1261,7 @@ private fun BitChordApp(
             onToggleShuffle = { controller?.let(QueueShuffle::toggle) },
             onCycleRepeat = {
                 controller?.let {
-                    val next = when (it.repeatMode) {
-                        Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL
-                        Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE
-                        else -> Player.REPEAT_MODE_OFF
-                    }
+                    val next = nextRepeatMode(it.repeatMode)
                     // Nothing else to do here: PlaybackService watches the
                     // repeat mode itself and takes AutoPlay's tracks out of
                     // the queue for the duration of repeat-all — and, unlike

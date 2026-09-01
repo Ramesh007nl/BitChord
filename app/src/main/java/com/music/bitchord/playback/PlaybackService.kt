@@ -102,6 +102,16 @@ const val ACTION_TOGGLE_AUTOPLAY = "com.music.bitchord.action.TOGGLE_AUTOPLAY"
 /** Session command used by the media notification's Shuffle button. */
 const val ACTION_TOGGLE_SHUFFLE = "com.music.bitchord.action.TOGGLE_SHUFFLE"
 
+/** Shared repeat cycle for phone, notification, and Android Auto controllers. */
+internal fun nextRepeatMode(current: Int): Int = when (current) {
+    Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL
+    Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE
+    else -> Player.REPEAT_MODE_OFF
+}
+
+/** Session command used by Android Auto/media controllers to cycle repeat mode. */
+const val ACTION_CYCLE_REPEAT = "com.tantov.music.action.CYCLE_REPEAT"
+
 /**
  * Background playback via Media3. A [MediaSessionService] gives us the media
  * notification, lockscreen/Bluetooth controls, and Android Auto surface for
@@ -208,6 +218,7 @@ class PlaybackService : MediaLibraryService() {
     private val favoriteCommand = SessionCommand(ACTION_TOGGLE_FAVORITE, Bundle.EMPTY)
     private val autoplayCommand = SessionCommand(ACTION_TOGGLE_AUTOPLAY, Bundle.EMPTY)
     private val shuffleCommand = SessionCommand(ACTION_TOGGLE_SHUFFLE, Bundle.EMPTY)
+    private val repeatCommand = SessionCommand(ACTION_CYCLE_REPEAT, Bundle.EMPTY)
 
     private var favoriteActionJob: Job? = null
     private var autoplayLoadJob: Job? = null
@@ -264,6 +275,7 @@ class PlaybackService : MediaLibraryService() {
                 .add(favoriteCommand)
                 .add(autoplayCommand)
                 .add(shuffleCommand)
+                .add(repeatCommand)
                 .build()
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                 .setAvailableSessionCommands(commands)
@@ -279,6 +291,10 @@ class PlaybackService : MediaLibraryService() {
             when (customCommand.customAction) {
                 ACTION_TOGGLE_AUTOPLAY -> toggleAutoplayFromNotification()
                 ACTION_TOGGLE_SHUFFLE -> toggleShuffleFromNotification()
+                ACTION_CYCLE_REPEAT -> {
+                    session.player.repeatMode = nextRepeatMode(session.player.repeatMode)
+                    session.setCustomLayout(notificationButtons())
+                }
                 ACTION_TOGGLE_FAVORITE -> session.player.currentMediaItem?.mediaId?.let {
                     toggleFavoriteFromNotification(it)
                 }
@@ -1024,7 +1040,24 @@ class PlaybackService : MediaLibraryService() {
             .setSessionCommand(shuffleCommand)
             .setDisplayName(if (shuffleEnabled) "Shuffle off" else "Shuffle on")
             .build()
-        return listOf(favorite, shuffle)
+        val repeatMode = player?.repeatMode ?: Player.REPEAT_MODE_OFF
+        val repeat = CommandButton.Builder(
+            when (repeatMode) {
+                Player.REPEAT_MODE_ONE -> CommandButton.ICON_REPEAT_ONE
+                Player.REPEAT_MODE_ALL -> CommandButton.ICON_REPEAT_ALL
+                else -> CommandButton.ICON_REPEAT_OFF
+            },
+        )
+            .setSessionCommand(repeatCommand)
+            .setDisplayName(
+                when (repeatMode) {
+                    Player.REPEAT_MODE_ONE -> "Repeat one"
+                    Player.REPEAT_MODE_ALL -> "Repeat all"
+                    else -> "Repeat off"
+                },
+            )
+            .build()
+        return listOf(favorite, shuffle, repeat)
     }
 
     private fun toggleShuffleFromNotification() {
