@@ -2,6 +2,7 @@ package com.music.bitchord
 
 import com.music.bitchord.data.local.LocalMusicCatalog
 import com.music.bitchord.data.local.LocalMusicTrack
+import com.music.bitchord.data.local.filterLocalMusicFolders
 import com.music.bitchord.data.local.mediaStoreStorageIdentity
 import com.music.bitchord.data.local.safStorageIdentity
 import com.music.bitchord.data.model.Song
@@ -48,6 +49,26 @@ class LocalMusicCatalogTest {
 
         assertEquals(listOf("Albums", "Zulu"), catalog.folders.map { it.label })
         assertEquals(listOf("a", "c"), catalog.folders.first().songs.map { it.videoId })
+    }
+
+    @Test
+    fun folderBrowseSearchMatchesLeafNameOrParentPath() {
+        val folders = LocalMusicCatalog.merge(
+            listOf(
+                track("music", "music", "Music/Tamil"),
+                track("download", "download", "Downloads/Tamil"),
+                track("rock", "rock", "Music/Rock"),
+            ),
+        ).folders
+
+        assertEquals(
+            setOf("Music/Tamil", "Downloads/Tamil"),
+            filterLocalMusicFolders(folders, "Tamil").map { it.key }.toSet(),
+        )
+        assertEquals(
+            listOf("Downloads/Tamil"),
+            filterLocalMusicFolders(folders, "Downloads").map { it.key },
+        )
     }
 
     @Test
