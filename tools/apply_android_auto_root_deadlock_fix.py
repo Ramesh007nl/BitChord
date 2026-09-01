@@ -1,5 +1,6 @@
 from pathlib import Path
 
+# This script intentionally performs only assertion-checked replacements.
 catalog_path = Path("app/src/main/java/com/music/bitchord/playback/AndroidAutoCatalog.kt")
 catalog = catalog_path.read_text()
 old_root = '    suspend fun root(): MediaItem = browsable(AndroidAutoRoute.Root, "BitChord")'
