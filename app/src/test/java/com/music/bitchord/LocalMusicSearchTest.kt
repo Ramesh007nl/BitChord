@@ -3,7 +3,13 @@ package com.music.bitchord
 import com.music.bitchord.data.model.SearchResult
 import com.music.bitchord.data.model.Song
 import com.music.bitchord.ui.mergeSongSearchResults
+import com.music.bitchord.ui.progressiveSongSearch
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -71,5 +77,32 @@ class LocalMusicSearchTest {
 
         assertTrue(merged.isFailure)
         assertEquals(failure, merged.exceptionOrNull())
+    }
+
+    @Test
+    fun fasterOnlineSourceIsPublishedBeforeDelayedYouTube() = runBlocking {
+        val releaseYouTube = CompletableDeferred<Unit>()
+        val interim = CompletableDeferred<List<SearchResult>>()
+        val youtubeSong = song("youtube", "Taylor Swift", "Taylor Swift")
+        val fastSong = song("fast", "Blank Space", "Taylor Swift")
+
+        val search = async {
+            progressiveSongSearch(
+                onlineSearch = {
+                    releaseYouTube.await()
+                    Result.success(listOf(SearchResult.Track(youtubeSong)))
+                },
+                additionalOnlineSearch = { listOf(SearchResult.Track(fastSong)) },
+                localSearch = { emptyList() },
+                onInterim = { interim.complete(it) },
+            )
+        }
+
+        val earlyRows = withTimeoutOrNull(250) { interim.await() }
+        releaseYouTube.complete(Unit)
+        search.await()
+
+        assertNotNull("Fast song results should appear before YouTube completes", earlyRows)
+        assertEquals("fast", (earlyRows!!.single() as SearchResult.Track).song.videoId)
     }
 }

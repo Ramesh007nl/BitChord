@@ -70,22 +70,43 @@ import java.util.Locale
 internal fun mergeSongSearchResults(
     online: Result<List<SearchResult>>,
     local: List<Song>,
+    additionalOnline: List<SearchResult> = emptyList(),
 ): Result<List<SearchResult>> {
     val localRows = local.map(SearchResult::Track)
     val onlineRows = online.getOrNull()
-    if (onlineRows == null && localRows.isEmpty()) {
+    if (onlineRows == null && additionalOnline.isEmpty() && localRows.isEmpty()) {
         return Result.failure(
             online.exceptionOrNull() ?: IllegalStateException("Search failed"),
         )
     }
 
-    val merged = (onlineRows.orEmpty() + localRows).distinctBy { result ->
+    val merged = (onlineRows.orEmpty() + additionalOnline + localRows).distinctBy { result ->
         when (result) {
             is SearchResult.Track -> result.song.localUri ?: result.song.videoId
             is SearchResult.Browse -> "browse:${result.item.browseId}"
         }
     }
     return Result.success(merged)
+}
+
+/**
+ * Coordinates the phone's song search sources and reports useful non-YouTube
+ * rows while the primary YouTube request is still running.
+ */
+internal suspend fun progressiveSongSearch(
+    onlineSearch: suspend () -> Result<List<SearchResult>>,
+    additionalOnlineSearch: suspend () -> List<SearchResult>,
+    localSearch: suspend () -> List<Song>,
+    onInterim: (List<SearchResult>) -> Unit,
+): Result<List<SearchResult>> {
+    val online = onlineSearch()
+    val additionalOnline = additionalOnlineSearch()
+    val local = localSearch()
+    mergeSongSearchResults(
+        online = Result.success(additionalOnline),
+        local = local,
+    ).getOrNull()?.takeIf { it.isNotEmpty() }?.let(onInterim)
+    return mergeSongSearchResults(online, local, additionalOnline)
 }
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
