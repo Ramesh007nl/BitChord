@@ -98,15 +98,23 @@ internal suspend fun progressiveSongSearch(
     additionalOnlineSearch: suspend () -> List<SearchResult>,
     localSearch: suspend () -> List<Song>,
     onInterim: (List<SearchResult>) -> Unit,
-): Result<List<SearchResult>> {
-    val online = onlineSearch()
-    val additionalOnline = additionalOnlineSearch()
-    val local = localSearch()
+): Result<List<SearchResult>> = coroutineScope {
+    val online = async { onlineSearch() }
+    val additionalOnline = async { additionalOnlineSearch() }
+    val local = async { localSearch() }
+
+    val localSongs = local.await()
+    localSongs.map(SearchResult::Track)
+        .takeIf { it.isNotEmpty() }
+        ?.let(onInterim)
+
+    val additionalOnlineRows = additionalOnline.await()
     mergeSongSearchResults(
-        online = Result.success(additionalOnline),
-        local = local,
+        online = Result.success(additionalOnlineRows),
+        local = localSongs,
     ).getOrNull()?.takeIf { it.isNotEmpty() }?.let(onInterim)
-    return mergeSongSearchResults(online, local, additionalOnline)
+
+    mergeSongSearchResults(online.await(), localSongs, additionalOnlineRows)
 }
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
@@ -1276,19 +1284,29 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 // browse-shaped filters (albums, artists, playlists) stay
                 // online-only. A local match also gives search an offline
                 // fallback when the network request fails.
-                val online = YtMusicRepository.search(request.query, request.filter)
-                val localSongs = if (request.filter == SearchFilter.SONGS) {
-                    runCatching {
-                        LocalMediaRepository.catalog(getApplication<Application>())
-                            .search(request.query)
-                    }.getOrDefault(emptyList())
-                } else {
-                    emptyList()
-                }
                 val result = if (request.filter == SearchFilter.SONGS) {
-                    mergeSongSearchResults(online, localSongs)
+                    progressiveSongSearch(
+                        onlineSearch = {
+                            YtMusicRepository.search(request.query, request.filter)
+                        },
+                        additionalOnlineSearch = {
+                            val (above, below) = sourceResults(request.query, request.filter)
+                            above + below
+                        },
+                        localSearch = {
+                            runCatching {
+                                LocalMediaRepository.catalog(getApplication<Application>())
+                                    .search(request.query)
+                            }.getOrDefault(emptyList())
+                        },
+                        onInterim = { rows ->
+                            if (request.requestId == newestRequestId.get()) {
+                                _results.value = UiState.Success(rows)
+                            }
+                        },
+                    )
                 } else {
-                    online
+                    YtMusicRepository.search(request.query, request.filter)
                 }
 
                 // A search that has been superseded shouldn't land on screen,
