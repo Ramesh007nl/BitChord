@@ -8,7 +8,6 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
-    <uses-permission android:name="androidx.car.app.MEDIA_TEMPLATES" />
     <!-- Saving a track to Music outlives the screen it was asked from. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -62,13 +61,6 @@
         <meta-data
             android:name="com.samsung.android.support.ongoing_activity"
             android:value="true" />
-
-        <meta-data
-            android:name="com.google.android.gms.car.application"
-            android:resource="@xml/automotive_app_desc" />
-        <meta-data
-            android:name="androidx.car.app.minCarApiLevel"
-            android:value="8" />
 
         <service
             android:name="androidx.appcompat.app.AppLocalesMetadataHolderService"
@@ -194,15 +186,6 @@
             android:foregroundServiceType="mediaPlayback">
             <intent-filter>
                 <action android:name="androidx.media3.session.MediaSessionService" />
-            </intent-filter>
-        </service>
-
-        <service
-            android:name=".car.TanTovCarAppService"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="androidx.car.app.CarAppService" />
-                <category android:name="androidx.car.app.category.MEDIA" />
             </intent-filter>
         </service>
 
