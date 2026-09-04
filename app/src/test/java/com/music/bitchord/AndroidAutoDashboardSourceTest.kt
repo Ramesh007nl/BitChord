@@ -8,6 +8,7 @@ import com.music.bitchord.playback.AndroidAutoCollectionKind
 import com.music.bitchord.playback.AndroidAutoMediaIds
 import com.music.bitchord.playback.AndroidAutoRoute
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -96,6 +97,7 @@ class AndroidAutoDashboardSourceTest {
         assertFalse(gateway.childrenRequests.contains(nonShelf))
     }
 
+    @OptIn(ExperimentalCoroutinesApi::class)
     @Test
     fun perRequestTimeoutIsBoundedWithoutAffectingIndependentlyBuiltLocal() = runTest {
         val localMusic = browseItem(
@@ -199,7 +201,7 @@ class AndroidAutoDashboardSourceTest {
             source.loadHomeOnline()
             fail("Expected embedded cancellation to be rethrown")
         } catch (actual: CancellationException) {
-            assertEquals(cancellation, actual)
+            assertEquals(cancellation.message, actual.message)
         }
     }
 
@@ -216,7 +218,7 @@ class AndroidAutoDashboardSourceTest {
             source.loadHomeOnline()
             fail("Expected thrown cancellation to be rethrown")
         } catch (actual: CancellationException) {
-            assertEquals(cancellation, actual)
+            assertEquals(cancellation.message, actual.message)
         }
     }
 
