@@ -24,6 +24,7 @@ import com.music.bitchord.playback.AndroidAutoRoute
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -138,6 +139,90 @@ class TanTovCarTemplateTest {
     }
 
     @Test
+    fun oversizedShelfUsesFiveItemsAndExactMoreTarget() {
+        val moreItem = browsableItem(
+            mediaId = AndroidAutoMediaIds.encode(
+                AndroidAutoRoute.Shelf(
+                    source = AndroidAutoRoute.Shelf.Source.HOME,
+                    ordinal = 7,
+                    title = "Focus & Flow / 夜",
+                ),
+            ),
+            title = "Focus & Flow / 夜",
+        )
+        val sourceItems = (1..7).map { index ->
+            playableItem("track-$index", "Track $index")
+        }
+        val clicked = mutableListOf<MediaItem>()
+
+        val template = factory.home(
+            sections = listOf(
+                section(
+                    key = "other:focusflow夜",
+                    title = "Focus & Flow / 夜",
+                    kind = DashboardSectionKind.OTHER,
+                    layout = DashboardLayout.GRID,
+                    items = sourceItems,
+                    moreItem = moreItem,
+                ),
+            ),
+            errorMessage = null,
+            onItemClick = clicked::add,
+            onRetry = {},
+        )
+
+        val gridItems = items(template.sections.single() as GridSection)
+        assertEquals(
+            listOf("Track 1", "Track 2", "Track 3", "Track 4", "Track 5", "More"),
+            gridItems.map { it.title.toString() },
+        )
+
+        click(requireNotNull(gridItems.last().onClickDelegate))
+
+        assertSame(moreItem, clicked.single())
+        assertEquals(
+            AndroidAutoMediaIds.encode(
+                AndroidAutoRoute.Shelf(
+                    source = AndroidAutoRoute.Shelf.Source.HOME,
+                    ordinal = 7,
+                    title = "Focus & Flow / 夜",
+                ),
+            ),
+            clicked.single().mediaId,
+        )
+    }
+
+    @Test
+    fun oversizedNonShelfSectionUsesSixItemsWithoutMore() {
+        val sourceItems = (1..7).map { index ->
+            playableItem("recent-$index", "Recent $index")
+        }
+
+        val template = factory.home(
+            sections = listOf(
+                section(
+                    key = "recently-played",
+                    title = "Recently Played",
+                    kind = DashboardSectionKind.RECENTLY_PLAYED,
+                    layout = DashboardLayout.GRID,
+                    items = sourceItems,
+                ),
+            ),
+            errorMessage = null,
+            onItemClick = {},
+            onRetry = {},
+        )
+
+        val gridItems = items(template.sections.single() as GridSection)
+        assertEquals(6, gridItems.size)
+        assertEquals(
+            listOf("Recent 1", "Recent 2", "Recent 3", "Recent 4", "Recent 5", "Recent 6"),
+            gridItems.map { it.title.toString() },
+        )
+        assertFalse(gridItems.any { it.title.toString() == "More" })
+    }
+
+    @Test
     fun errorTemplateKeepsLocalMusicAndAddsRetryRow() {
         var retries = 0
         val localMusic = browsableItem(
@@ -210,12 +295,14 @@ class TanTovCarTemplateTest {
         kind: DashboardSectionKind,
         layout: DashboardLayout,
         items: List<MediaItem>,
+        moreItem: MediaItem? = null,
     ): DashboardSection = DashboardSection(
         key = key,
         title = title,
         kind = kind,
         layout = layout,
         items = items,
+        moreItem = moreItem,
     )
 
     private fun browsableItem(
@@ -274,5 +361,7 @@ class TanTovCarTemplateTest {
 
     @Suppress("RestrictedApi")
     private fun <T : Item> items(section: Section<T>): List<T> =
-        TestDelegateInvoker.requestAllItemsForTest(section.itemsDelegate)
+        with(TestDelegateInvoker) {
+            section.itemsDelegate.requestAllItemsForTest()
+        }
 }

@@ -185,6 +185,35 @@ class AndroidAutoDashboardTest {
         assertEquals(first.key, variant.key)
     }
 
+    @Test
+    fun shelfMoreTargetSurvivesDashboardOrderingByIdentity() {
+        val moreItem = browseItem(
+            mediaId = AndroidAutoMediaIds.encode(
+                AndroidAutoRoute.Shelf(
+                    source = AndroidAutoRoute.Shelf.Source.HOME,
+                    ordinal = 7,
+                    title = "Focus & Flow / 夜",
+                ),
+            ),
+            title = "Focus & Flow / 夜",
+        )
+        val shelf = DashboardShelf(
+            title = "Focus & Flow / 夜",
+            subtitle = "Shelf subtitle",
+            items = (1..7).map { playableItem("track-$it", "Track $it") },
+            moreItem = moreItem,
+        )
+
+        val orderedShelf = AndroidAutoDashboard.order(
+            localMusic = localMusicItem(),
+            recents = emptyList(),
+            homeShelves = listOf(shelf),
+        ).single { it.kind == DashboardSectionKind.OTHER }
+
+        assertSame(moreItem, orderedShelf.moreItem)
+        assertEquals(moreItem.mediaId, orderedShelf.moreItem?.mediaId)
+    }
+
     private fun localMusicItem(): MediaItem = browseItem(
         AndroidAutoMediaIds.encode(AndroidAutoRoute.LocalMusic),
         "Local Music",
