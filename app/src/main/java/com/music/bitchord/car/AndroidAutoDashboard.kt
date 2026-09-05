@@ -21,6 +21,7 @@ data class DashboardShelf(
     val title: String,
     val subtitle: String,
     val items: List<MediaItem>,
+    val moreItem: MediaItem? = null,
 )
 
 data class DashboardSection(
@@ -29,6 +30,7 @@ data class DashboardSection(
     val kind: DashboardSectionKind,
     val layout: DashboardLayout,
     val items: List<MediaItem>,
+    val moreItem: MediaItem? = null,
 )
 
 object AndroidAutoDashboard {
@@ -94,6 +96,7 @@ object AndroidAutoDashboard {
         kind = kind,
         layout = DashboardLayout.GRID,
         items = items,
+        moreItem = moreItem,
     )
 
     private const val QUICK_PICKS_KEY = "quickpicks"

@@ -14,6 +14,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
@@ -57,16 +58,17 @@ class AndroidAutoDashboardSourceTest {
             browseId = "VLPL-not-a-home-shelf",
         )
         val shelfTrack = playableItem("shelf-track", "Focused Track")
+        val emittedShelfRow = browseItem(
+            mediaId = AndroidAutoMediaIds.encode(emittedShelf),
+            title = emittedShelf.title,
+            subtitle = "For quiet work",
+        )
         val gateway = FakeDashboardBrowseGateway().apply {
             children[AndroidAutoRoute.Recent] = { Result.success(emptyList()) }
             children[AndroidAutoRoute.Home] = {
                 Result.success(
                     listOf(
-                        browseItem(
-                            mediaId = AndroidAutoMediaIds.encode(emittedShelf),
-                            title = emittedShelf.title,
-                            subtitle = "For quiet work",
-                        ),
+                        emittedShelfRow,
                         browseItem(
                             mediaId = AndroidAutoMediaIds.encode(nonShelf),
                             title = "Not a shelf",
@@ -88,6 +90,7 @@ class AndroidAutoDashboardSourceTest {
         assertEquals("Deep Focus / தமிழ்", result.homeShelves.single().title)
         assertEquals("For quiet work", result.homeShelves.single().subtitle)
         assertEquals(listOf(shelfTrack), result.homeShelves.single().items)
+        assertSame(emittedShelfRow, result.homeShelves.single().moreItem)
         assertEquals(
             setOf(AndroidAutoRoute.Recent, AndroidAutoRoute.Home, emittedShelf),
             gateway.childrenRequests.toSet(),

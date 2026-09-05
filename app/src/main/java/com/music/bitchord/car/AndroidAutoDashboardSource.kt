@@ -103,6 +103,7 @@ class AndroidAutoDashboardSource(
                         title = row.mediaMetadata.title?.toString() ?: route.title,
                         subtitle = row.mediaMetadata.description?.toString().orEmpty(),
                         items = items,
+                        moreItem = row,
                     )
                 }
                 true
