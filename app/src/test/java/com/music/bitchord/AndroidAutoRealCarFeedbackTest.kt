@@ -14,6 +14,7 @@ import com.music.bitchord.data.model.Song
 import com.music.bitchord.playback.AndroidAutoCatalog
 import com.music.bitchord.playback.AndroidAutoDataSource
 import com.music.bitchord.playback.AndroidAutoLocalDataSource
+import com.music.bitchord.playback.AndroidAutoLocalSection
 import com.music.bitchord.playback.AndroidAutoRoute
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -73,7 +74,7 @@ class AndroidAutoRealCarFeedbackTest {
 
     private class CountingLocalSource : AndroidAutoLocalDataSource {
         var catalogCalls = 0
-        private val localSong = song("local", "https://img.example/w120-h120/local.jpg").copy(
+        private val localSong = song("local", null).copy(
             localUri = "content://media/external/audio/media/1",
             localPath = "Music/local.mp3",
         )
@@ -149,6 +150,20 @@ class AndroidAutoRealCarFeedbackTest {
         rows.forEach { row ->
             assertNotNull("${row.mediaMetadata.title} must have artwork", row.mediaMetadata.artworkUri)
         }
+    }
+
+    @Test
+    fun localSongsWithoutEmbeddedArtworkUseTanTovFallback() = runBlocking {
+        val catalog = AndroidAutoCatalog(OnlineSource(), CountingLocalSource())
+
+        val rows = catalog.children(
+            AndroidAutoRoute.LocalSection(AndroidAutoLocalSection.SONGS),
+            0,
+            20,
+        ).getOrThrow()
+
+        assertEquals(1, rows.size)
+        assertNotNull(rows.single().mediaMetadata.artworkUri)
     }
 
     @Test
