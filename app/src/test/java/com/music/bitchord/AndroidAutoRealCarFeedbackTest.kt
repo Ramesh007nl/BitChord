@@ -152,10 +152,14 @@ class AndroidAutoRealCarFeedbackTest {
     }
 
     @Test
-    fun androidAutoDataSourceExposesHomeContinuationApi() {
-        assertTrue(
-            AndroidAutoDataSource::class.java.methods.any { method -> method.name == "moreHome" },
-        )
+    fun androidAutoDataSourceExposesHomeContinuationApi() = runBlocking {
+        val source: AndroidAutoDataSource = OnlineSource().apply {
+            continuationResults["contract"] = Result.success(
+                HomeFeed(listOf(shelf("Contract", "contract")), null),
+            )
+        }
+
+        assertEquals("Contract", source.moreHome("contract").getOrThrow().shelves.single().title)
     }
 
     @Test
