@@ -312,7 +312,7 @@ class PlaybackService : MediaLibraryService() {
             browser: MediaSession.ControllerInfo,
             params: LibraryParams?,
         ): ListenableFuture<LibraryResult<MediaItem>> = Futures.immediateFuture(
-            LibraryResult.ofItem(androidAutoCatalog.root(), params),
+            LibraryResult.ofItem(androidAutoCatalog.root(), AndroidAutoBrowseHints.rootParams()),
         )
 
         override fun onGetChildren(
@@ -325,8 +325,9 @@ class PlaybackService : MediaLibraryService() {
         ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> = scope.future {
             val route = AndroidAutoMediaIds.parse(parentId)
                 ?: return@future LibraryResult.ofError(SessionError.ERROR_BAD_VALUE)
+            val returnParams = AndroidAutoBrowseHints.childParams(route)
             androidAutoCatalog.children(route, page, pageSize).fold(
-                onSuccess = { LibraryResult.ofItemList(it, params) },
+                onSuccess = { LibraryResult.ofItemList(it, returnParams) },
                 onFailure = { LibraryResult.ofError(SessionError.ERROR_IO) },
             )
         }
@@ -368,7 +369,12 @@ class PlaybackService : MediaLibraryService() {
             params: LibraryParams?,
         ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> = scope.future {
             androidAutoCatalog.search(query, page, pageSize).fold(
-                onSuccess = { LibraryResult.ofItemList(it, params) },
+                onSuccess = {
+                    LibraryResult.ofItemList(
+                        it,
+                        AndroidAutoBrowseHints.childParams(AndroidAutoRoute.Recent),
+                    )
+                },
                 onFailure = { LibraryResult.ofError(SessionError.ERROR_IO) },
             )
         }
