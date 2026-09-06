@@ -115,7 +115,7 @@ class AndroidAutoCatalogTest {
         val children = catalog.children(AndroidAutoRoute.Root, 0, 20).getOrThrow()
 
         assertEquals(
-            listOf("Home", "Explore", "Recently Played", "Library"),
+            listOf("Home", "Recents", "Browse", "Library"),
             children.map { it.mediaMetadata.title.toString() },
         )
         assertTrue(children.all { it.mediaMetadata.isBrowsable == true })
@@ -214,25 +214,35 @@ class AndroidAutoCatalogTest {
     }
 
     @Test
-    fun libraryOnlyShowsNonEmptyCategories() = runBlocking {
-        val playlist = ShelfItem("Road Trip", "Playlist", null, null, "VLPL-road")
-        val fake = FakeAutoDataSource().apply {
-            libraryResult = Result.success(
-                LibraryPage(
-                    likedSongs = listOf(song("liked")),
-                    librarySongs = emptyList(),
-                    shelves = listOf(HomeShelf("Playlists", listOf(playlist))),
-                ),
-            )
-        }
+    fun libraryRootIsStableAndDoesNotFetchNetwork() = runBlocking {
+        val fake = FakeAutoDataSource()
         val catalog = AndroidAutoCatalog(fake)
 
         val folders = catalog.children(AndroidAutoRoute.Library, 0, 20).getOrThrow()
-        assertEquals(listOf("Liked Songs", "Playlists"), folders.map { it.mediaMetadata.title.toString() })
         assertEquals(
             listOf(
+                "Local Music",
+                "Liked Songs",
+                "Songs",
+                "Playlists",
+                "Albums",
+                "Artists",
+                "Subscriptions",
+                "Podcasts",
+            ),
+            folders.map { it.mediaMetadata.title.toString() },
+        )
+        assertEquals(0, fake.libraryCalls)
+        assertEquals(
+            listOf(
+                AndroidAutoRoute.LocalMusic,
                 AndroidAutoRoute.LibrarySection(AndroidAutoLibrarySection.LIKED),
+                AndroidAutoRoute.LibrarySection(AndroidAutoLibrarySection.SONGS),
                 AndroidAutoRoute.LibrarySection(AndroidAutoLibrarySection.PLAYLISTS),
+                AndroidAutoRoute.LibrarySection(AndroidAutoLibrarySection.ALBUMS),
+                AndroidAutoRoute.LibrarySection(AndroidAutoLibrarySection.ARTISTS),
+                AndroidAutoRoute.LibrarySection(AndroidAutoLibrarySection.SUBSCRIPTIONS),
+                AndroidAutoRoute.LibrarySection(AndroidAutoLibrarySection.PODCASTS),
             ),
             folders.mapNotNull { AndroidAutoMediaIds.parse(it.mediaId) },
         )
@@ -292,7 +302,7 @@ class AndroidAutoCatalogTest {
     }
 
     @Test
-    fun signedOutLibraryStaysAuthGatedWhileRecentsUseTheirOwnFeed() = runBlocking {
+    fun signedOutLibraryKeepsLocalMusicWithoutCallingAuthenticatedFeeds() = runBlocking {
         val fake = FakeAutoDataSource().apply {
             signedIn = false
             recentsResult = Result.success(emptyList())
@@ -302,7 +312,10 @@ class AndroidAutoCatalogTest {
         val catalog = AndroidAutoCatalog(fake)
 
         assertTrue(catalog.children(AndroidAutoRoute.Recent, 0, 20).getOrThrow().isEmpty())
-        assertTrue(catalog.children(AndroidAutoRoute.Library, 0, 20).getOrThrow().isEmpty())
+        assertEquals(
+            listOf("Local Music"),
+            catalog.children(AndroidAutoRoute.Library, 0, 20).getOrThrow().map { it.mediaMetadata.title.toString() },
+        )
         assertTrue(
             catalog.children(
                 AndroidAutoRoute.LibrarySection(AndroidAutoLibrarySection.LIKED),
@@ -316,14 +329,22 @@ class AndroidAutoCatalogTest {
     }
 
     @Test
-    fun signedInNetworkFailurePropagatesInsteadOfLookingLikeEmptyLibrary() = runBlocking {
+    fun signedInLibraryRootIsInstantButSectionPropagatesNetworkFailure() = runBlocking {
         val fake = FakeAutoDataSource().apply {
             signedIn = true
             libraryResult = Result.failure(IOException("offline"))
         }
         val catalog = AndroidAutoCatalog(fake)
 
-        assertTrue(catalog.children(AndroidAutoRoute.Library, 0, 20).isFailure)
+        assertTrue(catalog.children(AndroidAutoRoute.Library, 0, 20).isSuccess)
+        assertEquals(0, fake.libraryCalls)
+        assertTrue(
+            catalog.children(
+                AndroidAutoRoute.LibrarySection(AndroidAutoLibrarySection.LIKED),
+                0,
+                20,
+            ).isFailure,
+        )
         assertEquals(1, fake.libraryCalls)
     }
 }
