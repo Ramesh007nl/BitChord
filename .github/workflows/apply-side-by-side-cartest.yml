@@ -23,22 +23,13 @@ jobs:
           from pathlib import Path
           p = Path('app/build.gradle.kts')
           text = p.read_text()
-          old = '''        create("dev") {
-            dimension = "env"
-            applicationId = "com.tantov.music"
-            resValue("string", "app_name", "TanTov Music")
-        }
-'''
-          new = '''        create("dev") {
-            dimension = "env"
-            // Side-by-side real-car test build: never replaces the user's existing TanTov install.
-            applicationId = "com.tantov.music.cartest"
-            resValue("string", "app_name", "TanTov Music Test")
-        }
-'''
-          if old not in text:
-              raise SystemExit('Expected dev flavor block not found')
-          p.write_text(text.replace(old, new, 1))
+          old_id = '            applicationId = "com.tantov.music"'
+          old_name = '            resValue("string", "app_name", "TanTov Music")'
+          if old_id not in text or old_name not in text:
+              raise SystemExit('Expected dev flavor identity not found')
+          text = text.replace(old_id, '            applicationId = "com.tantov.music.cartest"', 1)
+          text = text.replace(old_name, '            resValue("string", "app_name", "TanTov Music Test")', 1)
+          p.write_text(text)
           PY
 
       - name: Commit identity change
