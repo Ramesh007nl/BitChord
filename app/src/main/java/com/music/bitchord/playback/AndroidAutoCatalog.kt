@@ -4,6 +4,8 @@ import android.os.Bundle
 import androidx.core.net.toUri
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import com.music.bitchord.BuildConfig
+import com.music.bitchord.R
 import com.music.bitchord.data.YtMusicRepository
 import com.music.bitchord.data.model.ArtistPage
 import com.music.bitchord.data.model.BrowseItem
@@ -82,13 +84,21 @@ class AndroidAutoCatalog(
         refreshAuthStateIfNeeded()
         rememberedItems[AndroidAutoMediaIds.encode(route)] ?: when (route) {
             AndroidAutoRoute.Root -> root()
-            AndroidAutoRoute.Home -> browsable(route, "Home")
-            AndroidAutoRoute.Explore -> browsable(route, "Explore")
-            AndroidAutoRoute.Recent -> browsable(route, "Recently Played")
-            AndroidAutoRoute.Library -> browsable(route, "Library")
-            AndroidAutoRoute.LocalMusic -> browsable(route, "Local Music")
-            is AndroidAutoRoute.LocalSection -> browsable(route, localSectionTitle(route.section))
-            is AndroidAutoRoute.LibrarySection -> browsable(route, librarySectionTitle(route.section))
+            AndroidAutoRoute.Home -> browsable(route, "Home", artwork = resourceArtwork(R.drawable.ic_car_home))
+            AndroidAutoRoute.Explore -> browsable(route, "Browse", artwork = resourceArtwork(R.drawable.ic_car_browse))
+            AndroidAutoRoute.Recent -> browsable(route, "Recents", artwork = resourceArtwork(R.drawable.ic_car_recents))
+            AndroidAutoRoute.Library -> browsable(route, "Library", artwork = resourceArtwork(R.drawable.ic_car_library))
+            AndroidAutoRoute.LocalMusic -> browsable(route, "Local Music", artwork = resourceArtwork(R.drawable.ic_car_local_music))
+            is AndroidAutoRoute.LocalSection -> browsable(
+                route,
+                localSectionTitle(route.section),
+                artwork = resourceArtwork(R.drawable.ic_car_local_music),
+            )
+            is AndroidAutoRoute.LibrarySection -> browsable(
+                route,
+                librarySectionTitle(route.section),
+                artwork = resourceArtwork(R.drawable.ic_car_library),
+            )
             is AndroidAutoRoute.LocalCollection,
             is AndroidAutoRoute.Collection,
             is AndroidAutoRoute.Shelf,
@@ -182,15 +192,34 @@ class AndroidAutoCatalog(
     }
 
     private fun rootChildren(): List<MediaItem> = listOf(
-        browsable(AndroidAutoRoute.Home, "Home"),
-        browsable(AndroidAutoRoute.Explore, "Explore"),
-        browsable(AndroidAutoRoute.Recent, "Recently Played"),
-        browsable(AndroidAutoRoute.Library, "Library"),
+        browsable(AndroidAutoRoute.Home, "Home", artwork = resourceArtwork(R.drawable.ic_car_home)),
+        browsable(AndroidAutoRoute.Recent, "Recents", artwork = resourceArtwork(R.drawable.ic_car_recents)),
+        browsable(AndroidAutoRoute.Explore, "Browse", artwork = resourceArtwork(R.drawable.ic_car_browse)),
+        browsable(AndroidAutoRoute.Library, "Library", artwork = resourceArtwork(R.drawable.ic_car_library)),
     )
 
     private suspend fun homeFeed(): HomeFeed {
         homeCache?.takeIf { nowMs() - it.storedAt <= HOME_TTL_MS }?.let { return it.value }
-        return dataSource.home().getOrThrow().also { homeCache = CacheEntry(it, nowMs()) }
+
+        val first = dataSource.home().getOrThrow()
+        val shelves = first.shelves.toMutableList()
+        var continuation = first.continuation
+        repeat(MAX_HOME_CONTINUATIONS) {
+            val token = continuation ?: return@repeat
+            val next = dataSource.moreHome(token).getOrNull()
+            if (next == null) {
+                continuation = null
+                return@repeat
+            }
+            shelves += next.shelves
+            continuation = next.continuation
+        }
+        val richerFeed = HomeFeed(
+            shelves = shelves.distinctBy { it.title.trim().lowercase() },
+            continuation = continuation,
+        )
+        homeCache = CacheEntry(richerFeed, nowMs())
+        return richerFeed
     }
 
     private suspend fun exploreFeed(): List<HomeShelf> {
@@ -266,31 +295,50 @@ class AndroidAutoCatalog(
 
     private suspend fun historyRows(): List<MediaItem> = history().map(::playableRow)
 
-    private suspend fun libraryFolders(): List<MediaItem> = buildList {
-        // Local Music is independent of YouTube authentication. A signed-out
-        // driver can still browse and play the music already on the phone.
-        val local = runCatching { localDataSource.catalog() }.getOrNull()
-        if (local?.songs?.isNotEmpty() == true) {
-            add(browsable(AndroidAutoRoute.LocalMusic, "Local Music"))
-        }
+    private fun libraryFolders(): List<MediaItem> = buildList {
+        // The car's Library landing page must be instant. Do not scan local
+        // storage or fetch all YouTube library feeds merely to discover which
+        // stable categories exist.
+        add(
+            browsable(
+                AndroidAutoRoute.LocalMusic,
+                "Local Music",
+                artwork = resourceArtwork(R.drawable.ic_car_local_music),
+            ),
+        )
 
         if (!dataSource.isSignedIn()) return@buildList
-        val page = library()
-        if (page.likedSongs.isNotEmpty()) {
-            add(browsable(AndroidAutoRoute.LibrarySection(AndroidAutoLibrarySection.LIKED), "Liked Songs"))
-        }
-        if (page.librarySongs.isNotEmpty()) {
-            add(browsable(AndroidAutoRoute.LibrarySection(AndroidAutoLibrarySection.SONGS), "Songs"))
-        }
+        add(
+            browsable(
+                AndroidAutoRoute.LibrarySection(AndroidAutoLibrarySection.LIKED),
+                "Liked Songs",
+                artwork = resourceArtwork(R.drawable.ic_car_library),
+            ),
+        )
+        add(
+            browsable(
+                AndroidAutoRoute.LibrarySection(AndroidAutoLibrarySection.SONGS),
+                "Songs",
+                artwork = resourceArtwork(R.drawable.ic_car_library),
+            ),
+        )
         LIBRARY_SHELVES.forEach { (section, title) ->
-            if (page.shelves.firstOrNull { it.title.equals(title, ignoreCase = true) }?.items?.isNotEmpty() == true) {
-                add(browsable(AndroidAutoRoute.LibrarySection(section), title))
-            }
+            add(
+                browsable(
+                    AndroidAutoRoute.LibrarySection(section),
+                    title,
+                    artwork = resourceArtwork(R.drawable.ic_car_library),
+                ),
+            )
         }
     }
 
     private fun localMusicSections(): List<MediaItem> = AndroidAutoLocalSection.entries.map { section ->
-        browsable(AndroidAutoRoute.LocalSection(section), localSectionTitle(section))
+        browsable(
+            AndroidAutoRoute.LocalSection(section),
+            localSectionTitle(section),
+            artwork = resourceArtwork(R.drawable.ic_car_local_music),
+        )
     }
 
     private suspend fun localSectionRows(section: AndroidAutoLocalSection): List<MediaItem> {
@@ -302,7 +350,7 @@ class AndroidAutoCatalog(
                     AndroidAutoRoute.LocalCollection(AndroidAutoLocalCollectionKind.FOLDER, folder.key),
                     folder.label,
                     "${folder.songs.size} songs",
-                    folder.songs.firstOrNull()?.thumbnailUrl,
+                    folder.songs.firstOrNull()?.thumbnailUrl ?: resourceArtwork(R.drawable.ic_car_local_music),
                 )
             }
             AndroidAutoLocalSection.ALBUMS -> local.songs
@@ -317,7 +365,7 @@ class AndroidAutoCatalog(
                         AndroidAutoRoute.LocalCollection(AndroidAutoLocalCollectionKind.ALBUM, album),
                         album,
                         artists.joinToString(" • "),
-                        songs.firstOrNull()?.thumbnailUrl,
+                        songs.firstOrNull()?.thumbnailUrl ?: resourceArtwork(R.drawable.ic_car_local_music),
                     )
                 }
             AndroidAutoLocalSection.ARTISTS -> local.songs
@@ -329,7 +377,7 @@ class AndroidAutoCatalog(
                         AndroidAutoRoute.LocalCollection(AndroidAutoLocalCollectionKind.ARTIST, artist),
                         artist,
                         "${songs.size} songs",
-                        songs.firstOrNull()?.thumbnailUrl,
+                        songs.firstOrNull()?.thumbnailUrl ?: resourceArtwork(R.drawable.ic_car_local_music),
                     )
                 }
         }
@@ -533,6 +581,9 @@ class AndroidAutoCatalog(
         )
     }
 
+    private fun resourceArtwork(resId: Int): String =
+        "android.resource://${BuildConfig.APPLICATION_ID}/$resId"
+
     private fun localSectionTitle(section: AndroidAutoLocalSection): String = when (section) {
         AndroidAutoLocalSection.SONGS -> "Songs"
         AndroidAutoLocalSection.FOLDERS -> "Folders"
@@ -572,6 +623,7 @@ class AndroidAutoCatalog(
 
     companion object {
         private const val HOME_TTL_MS = 5 * 60_000L
+        private const val MAX_HOME_CONTINUATIONS = 2
         private const val RECENTS_TTL_MS = 30_000L
         private const val QUICK_PICKS_TTL_MS = 60_000L
         private const val AUTH_TTL_MS = 2 * 60_000L
