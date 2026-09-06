@@ -2,7 +2,7 @@ name: Android Auto Legacy Browser Smoke
 
 on:
   push:
-    branches: [feat/android-auto-full, feat/tantov-music-v1, feat/tantov-auto-dashboard]
+    branches: [feat/android-auto-full, feat/tantov-music-v1, feat/tantov-auto-dashboard, integration/bitChord-android-auto-2026-09]
   pull_request:
     branches: [main]
 
@@ -31,4 +31,4 @@ jobs:
           disable-animations: true
           script: >-
             ./gradlew connectedDevDebugAndroidTest
-            -Pandroid.testInstrumentationRunnerArguments.class=com.music.bitchord.AndroidAutoLegacyBrowserTest,com.music.bitchord.TanTovTopBarBrandingTest,com.music.bitchord.TanTovCarManifestTest
+            -Pandroid.testInstrumentationRunnerArguments.class=com.music.bitchord.AndroidAutoLegacyBrowserTest,com.music.bitchord.AndroidAutoMediaLibraryTest,com.music.bitchord.TanTovTopBarBrandingTest,com.music.bitchord.TanTovCarManifestTest
