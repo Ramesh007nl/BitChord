@@ -1,5 +1,6 @@
 package com.music.bitchord
 
+import android.content.Intent
 import android.content.pm.PackageManager
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -51,5 +52,22 @@ class TanTovCarManifestTest {
         assertTrue(capabilities.contains("media"))
         assertTrue(capabilities.contains("template"))
         assertTrue(appInfo.metaData.getInt("androidx.car.app.TintableAttributionIcon") != 0)
+
+        val media3 = Intent("androidx.media3.session.MediaLibraryService")
+            .setPackage(context.packageName)
+        val legacy = Intent("android.media.browse.MediaBrowserService")
+            .setPackage(context.packageName)
+        assertTrue(
+            context.packageManager.queryIntentServices(
+                media3,
+                PackageManager.ResolveInfoFlags.of(0),
+            ).isNotEmpty(),
+        )
+        assertTrue(
+            context.packageManager.queryIntentServices(
+                legacy,
+                PackageManager.ResolveInfoFlags.of(0),
+            ).isNotEmpty(),
+        )
     }
 }
