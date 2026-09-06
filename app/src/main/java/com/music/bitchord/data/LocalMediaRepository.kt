@@ -28,9 +28,9 @@ import java.util.Locale
 object LocalMediaRepository {
 
     private const val TAG = "BitChord"
+    private const val SAF_METADATA_CONCURRENCY = 4
 
-    @Volatile
-    private var cachedCatalog: LocalMusicCatalog? = null
+    private val catalogCache = SingleFlightCache<LocalMusicCatalog>()
 
     /** Check if storage/audio permission is granted to query device local music. */
     fun hasStoragePermission(context: Context): Boolean {
@@ -301,7 +301,7 @@ object LocalMediaRepository {
      * One catalog for both access modes. MediaStore rows are merged first so a
      * file visible through both A and B keeps the stable MediaStore content URI.
      */
-    suspend fun refresh(context: Context): LocalMusicCatalog = withContext(Dispatchers.IO) {
+    private suspend fun loadCatalog(context: Context): LocalMusicCatalog = withContext(Dispatchers.IO) {
         val allMusicRows = if (
             AppSettings.localAllMusicEnabled.value && hasStoragePermission(context)
         ) {
@@ -310,23 +310,42 @@ object LocalMediaRepository {
             emptyList()
         }
 
-        val selectedRows = AppSettings.localMusicTreeUris.value
-            .toList()
-            .sorted()
-            .flatMap { scanTree(context, it) }
+        val selectedRows = buildList {
+            AppSettings.localMusicTreeUris.value
+                .toList()
+                .sorted()
+                .forEach { treeUri -> addAll(scanTree(context, treeUri)) }
+        }
 
-        LocalMusicCatalog.merge(allMusicRows, selectedRows).also { cachedCatalog = it }
+        LocalMusicCatalog.merge(allMusicRows, selectedRows)
     }
 
+    /** Explicit rescan: serialize with any cold phone/car request and replace the cache. */
+    suspend fun refresh(context: Context): LocalMusicCatalog =
+        catalogCache.reload { loadCatalog(context) }
+
+    /** Phone UI and Android Auto share one cold scan instead of scanning the same folder twice. */
     suspend fun catalog(context: Context): LocalMusicCatalog =
-        cachedCatalog ?: refresh(context)
+        catalogCache.getOrLoad { loadCatalog(context) }
 
     fun invalidate() {
-        cachedCatalog = null
+        catalogCache.invalidate()
     }
 
-    /** Scan one persisted Storage Access Framework tree without broad file access. */
-    private fun scanTree(context: Context, treeUriString: String): List<LocalMusicTrack> {
+    private data class SafAudioCandidate(
+        val uri: String,
+        val fileName: String,
+        val path: String,
+        val folderLabel: String,
+        val documentId: String?,
+        val sizeBytes: Long,
+    )
+
+    /**
+     * Walk the tree deterministically, then read expensive media tags with bounded
+     * concurrency. Four retrievers overlap I/O without flooding the phone.
+     */
+    private suspend fun scanTree(context: Context, treeUriString: String): List<LocalMusicTrack> {
         val treeUri = runCatching { Uri.parse(treeUriString) }.getOrNull() ?: return emptyList()
         val hasGrant = context.contentResolver.persistedUriPermissions.any {
             it.uri == treeUri && it.isReadPermission
@@ -337,7 +356,7 @@ object LocalMediaRepository {
             .getOrNull() ?: return emptyList()
         if (!root.exists() || !root.isDirectory) return emptyList()
 
-        val rows = mutableListOf<LocalMusicTrack>()
+        val candidates = mutableListOf<SafAudioCandidate>()
         val rootLabel = root.name?.takeIf { it.isNotBlank() } ?: "Selected folder"
 
         fun visit(directory: DocumentFile, path: String) {
@@ -359,25 +378,17 @@ object LocalMediaRepository {
                     ) -> {
                         val uri = child.uri.toString()
                         val fileName = name.ifBlank { "Audio" }
-                        val song = buildSongFromUri(
-                            context = context,
-                            uriStr = uri,
-                            fileName = fileName,
-                        ).copy(localPath = "$path/$fileName")
                         val documentId = runCatching {
                             DocumentsContract.getDocumentId(child.uri)
                         }.getOrNull()
                         val sizeBytes = runCatching { child.length() }.getOrDefault(0L)
-
-                        rows += LocalMusicTrack(
-                            song = song,
-                            folderKey = path,
+                        candidates += SafAudioCandidate(
+                            uri = uri,
+                            fileName = fileName,
+                            path = path,
                             folderLabel = path.substringAfterLast('/').ifBlank { rootLabel },
-                            identity = safStorageIdentity(
-                                documentId = documentId,
-                                uri = uri,
-                                sizeBytes = sizeBytes,
-                            ),
+                            documentId = documentId,
+                            sizeBytes = sizeBytes,
                         )
                     }
                 }
@@ -386,7 +397,25 @@ object LocalMediaRepository {
 
         runCatching { visit(root, rootLabel) }
             .onFailure { Log.w(TAG, "Failed scanning selected music tree: ${it.message}") }
-        return rows
+
+        return candidates.mapBoundedConcurrent(SAF_METADATA_CONCURRENCY) { candidate ->
+            val song = buildSongFromUri(
+                context = context,
+                uriStr = candidate.uri,
+                fileName = candidate.fileName,
+            ).copy(localPath = "${candidate.path}/${candidate.fileName}")
+
+            LocalMusicTrack(
+                song = song,
+                folderKey = candidate.path,
+                folderLabel = candidate.folderLabel,
+                identity = safStorageIdentity(
+                    documentId = candidate.documentId,
+                    uri = candidate.uri,
+                    sizeBytes = candidate.sizeBytes,
+                ),
+            )
+        }
     }
 
     private fun isAudioFileName(name: String): Boolean {

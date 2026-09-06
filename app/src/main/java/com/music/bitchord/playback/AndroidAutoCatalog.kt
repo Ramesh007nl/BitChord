@@ -553,7 +553,9 @@ class AndroidAutoCatalog(
                     )
                 }
                 song.albumName?.let(::setAlbumTitle)
-                song.artworkAt(NOTIFICATION_ART_PX)?.toUri()?.let(::setArtworkUri)
+                val artwork = song.artworkAt(NOTIFICATION_ART_PX)
+                    ?: if (song.localUri != null) resourceArtwork(R.drawable.ic_car_local_music) else null
+                artwork?.toUri()?.let(::setArtworkUri)
             }
             .build()
         return MediaItem.Builder()
