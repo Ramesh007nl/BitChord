@@ -104,6 +104,27 @@ class AndroidAutoRealCarFeedbackTest {
     }
 
     @Test
+    fun libraryRootImmediatelyMirrorsMobileCategories() = runBlocking {
+        val catalog = AndroidAutoCatalog(OnlineSource(), CountingLocalSource())
+
+        val rows = catalog.children(AndroidAutoRoute.Library, 0, 20).getOrThrow()
+
+        assertEquals(
+            listOf(
+                "Local Music",
+                "Liked Songs",
+                "Songs",
+                "Playlists",
+                "Albums",
+                "Artists",
+                "Subscriptions",
+                "Podcasts",
+            ),
+            rows.map { it.mediaMetadata.title.toString() },
+        )
+    }
+
+    @Test
     fun libraryGridCategoriesAlwaysHaveArtwork() = runBlocking {
         val catalog = AndroidAutoCatalog(OnlineSource(), CountingLocalSource())
 
