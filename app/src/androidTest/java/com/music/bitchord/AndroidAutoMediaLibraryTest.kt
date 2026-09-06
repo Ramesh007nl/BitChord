@@ -6,12 +6,10 @@ import androidx.media3.session.MediaBrowser
 import androidx.media3.session.SessionToken
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.google.common.util.concurrent.ListenableFuture
 import com.music.bitchord.playback.AndroidAutoMediaIds
 import com.music.bitchord.playback.AndroidAutoRoute
 import com.music.bitchord.playback.PlaybackService
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withContext
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -19,7 +17,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
-import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 @OptIn(UnstableApi::class)
@@ -29,26 +26,13 @@ class AndroidAutoMediaLibraryTest {
 
     @Before
     fun setup() {
-        val instrumentation = InstrumentationRegistry.getInstrumentation()
-        val context = instrumentation.targetContext
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
         val token = SessionToken(context, ComponentName(context, PlaybackService::class.java))
-        val latch = CountDownLatch(1)
-        var browserInstance: MediaBrowser? = null
 
-        instrumentation.runOnMainSync {
-            val future = MediaBrowser.Builder(context, token).buildAsync()
-            future.addListener(
-                {
-                    browserInstance = future.get()
-                    latch.countDown()
-                },
-                { command -> command.run() },
-            )
+        mediaBrowser = awaitOnMain {
+            MediaBrowser.Builder(context, token).buildAsync()
         }
-
-        assertTrue("MediaBrowser connection timed out", latch.await(10, TimeUnit.SECONDS))
-        assertNotNull("MediaBrowser instance must not be null", browserInstance)
-        mediaBrowser = browserInstance!!
+        assertNotNull("MediaBrowser instance must not be null", mediaBrowser)
     }
 
     @After
@@ -61,16 +45,16 @@ class AndroidAutoMediaLibraryTest {
     }
 
     @Test
-    fun rootAndTopLevelChildrenUseStableTanTovIds() = runBlocking {
-        val root = withContext(Dispatchers.Main) {
-            mediaBrowser.getLibraryRoot(null).get(10, TimeUnit.SECONDS)
+    fun rootAndTopLevelChildrenUseStableTanTovIds() {
+        val root = awaitOnMain {
+            mediaBrowser.getLibraryRoot(null)
         }.value
         assertNotNull(root)
         assertEquals("tantov:auto:v1:root", root!!.mediaId)
         assertTrue(root.mediaMetadata.isBrowsable == true)
 
-        val children = withContext(Dispatchers.Main) {
-            mediaBrowser.getChildren(root.mediaId, 0, 20, null).get(10, TimeUnit.SECONDS)
+        val children = awaitOnMain {
+            mediaBrowser.getChildren(root.mediaId, 0, 20, null)
         }.value
         assertNotNull(children)
         assertEquals(
@@ -80,10 +64,10 @@ class AndroidAutoMediaLibraryTest {
     }
 
     @Test
-    fun getItemResolvesStableHomeRoute() = runBlocking {
+    fun getItemResolvesStableHomeRoute() {
         val homeId = AndroidAutoMediaIds.encode(AndroidAutoRoute.Home)
-        val item = withContext(Dispatchers.Main) {
-            mediaBrowser.getItem(homeId).get(10, TimeUnit.SECONDS)
+        val item = awaitOnMain {
+            mediaBrowser.getItem(homeId)
         }.value
 
         assertNotNull(item)
@@ -92,15 +76,28 @@ class AndroidAutoMediaLibraryTest {
     }
 
     @Test
-    fun searchAndSearchResultReturnLibraryResultsWithoutCrashing() = runBlocking {
-        val search = withContext(Dispatchers.Main) {
-            mediaBrowser.search("Adele", null).get(10, TimeUnit.SECONDS)
+    fun searchAndSearchResultReturnLibraryResultsWithoutCrashing() {
+        val search = awaitOnMain {
+            mediaBrowser.search("Adele", null)
         }
         assertNotNull(search)
 
-        val results = withContext(Dispatchers.Main) {
-            mediaBrowser.getSearchResult("Adele", 0, 10, null).get(10, TimeUnit.SECONDS)
+        val results = awaitOnMain {
+            mediaBrowser.getSearchResult("Adele", 0, 10, null)
         }
         assertNotNull(results)
+    }
+
+    /**
+     * Media3 browser methods must be invoked from the browser's application looper (main),
+     * but waiting on the returned future on that same looper deadlocks result delivery.
+     */
+    private fun <T> awaitOnMain(call: () -> ListenableFuture<T>): T {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        lateinit var future: ListenableFuture<T>
+        instrumentation.runOnMainSync {
+            future = call()
+        }
+        return future.get(20, TimeUnit.SECONDS)
     }
 }
