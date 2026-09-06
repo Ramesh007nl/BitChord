@@ -34,8 +34,10 @@ class LocalMediaScanConcurrencyTest {
     }
 
     @Test(expected = IllegalArgumentException::class)
-    fun boundedMapRejectsNonPositiveConcurrency() = runBlocking {
-        listOf(1).mapBoundedConcurrent(concurrency = 0) { it }
+    fun boundedMapRejectsNonPositiveConcurrency() {
+        runBlocking {
+            listOf(1).mapBoundedConcurrent(concurrency = 0) { it }
+        }
     }
 
     @Test
