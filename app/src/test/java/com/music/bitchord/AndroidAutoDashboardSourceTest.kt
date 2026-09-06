@@ -225,6 +225,61 @@ class AndroidAutoDashboardSourceTest {
         }
     }
 
+    @Test
+    fun syntheticQuickPicksShelfFlowsIntoDashboardBeforeOtherHomeShelves() = runTest {
+        val quickRoute = AndroidAutoRoute.Shelf(
+            AndroidAutoRoute.Shelf.Source.HOME,
+            0,
+            "Quick Picks",
+        )
+        val otherRoute = AndroidAutoRoute.Shelf(
+            AndroidAutoRoute.Shelf.Source.HOME,
+            1,
+            "Fresh Finds",
+        )
+        val gateway = FakeDashboardBrowseGateway().apply {
+            children[AndroidAutoRoute.Recent] = { Result.success(emptyList()) }
+            children[AndroidAutoRoute.Home] = {
+                Result.success(
+                    listOf(
+                        browseItem(AndroidAutoMediaIds.encode(quickRoute), "Quick Picks"),
+                        browseItem(AndroidAutoMediaIds.encode(otherRoute), "Fresh Finds"),
+                    ),
+                )
+            }
+            children[quickRoute] = { Result.success(listOf(playableItem("q1", "Quick One"))) }
+            children[otherRoute] = { Result.success(listOf(playableItem("f1", "Fresh One"))) }
+        }
+
+        val result = AndroidAutoDashboardSource(gateway, 100).loadHomeOnline()
+
+        assertEquals(listOf("Quick Picks", "Fresh Finds"), result.homeShelves.map { it.title })
+    }
+
+    @Test
+    fun quickPicksFailureKeepsOtherHomeShelvesAndReportsPartialError() = runTest {
+        val quickRoute = AndroidAutoRoute.Shelf(AndroidAutoRoute.Shelf.Source.HOME, 0, "Quick Picks")
+        val otherRoute = AndroidAutoRoute.Shelf(AndroidAutoRoute.Shelf.Source.HOME, 1, "Fresh Finds")
+        val gateway = FakeDashboardBrowseGateway().apply {
+            children[AndroidAutoRoute.Recent] = { Result.success(emptyList()) }
+            children[AndroidAutoRoute.Home] = {
+                Result.success(
+                    listOf(
+                        browseItem(AndroidAutoMediaIds.encode(quickRoute), "Quick Picks"),
+                        browseItem(AndroidAutoMediaIds.encode(otherRoute), "Fresh Finds"),
+                    ),
+                )
+            }
+            children[quickRoute] = { Result.failure(IOException("quick picks offline")) }
+            children[otherRoute] = { Result.success(listOf(playableItem("f1", "Fresh One"))) }
+        }
+
+        val result = AndroidAutoDashboardSource(gateway, 100).loadHomeOnline()
+
+        assertEquals(listOf("Fresh Finds"), result.homeShelves.map { it.title })
+        assertNotNull(result.errorMessage)
+    }
+
     private class FakeDashboardBrowseGateway : DashboardBrowseGateway {
         val items = mutableMapOf<AndroidAutoRoute, Result<MediaItem>>()
         val children = mutableMapOf<AndroidAutoRoute, suspend () -> Result<List<MediaItem>>>()
