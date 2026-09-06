@@ -27,8 +27,18 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class AndroidAutoRealCarFeedbackTest {
-    private class OnlineSource : AndroidAutoDataSource {
-        override suspend fun home() = Result.success(HomeFeed(emptyList(), null))
+    private open class OnlineSource : AndroidAutoDataSource {
+        var homeResult: Result<HomeFeed> = Result.success(HomeFeed(emptyList(), null))
+        val continuationResults = mutableMapOf<String, Result<HomeFeed>>()
+        var moreHomeCalls = 0
+
+        override suspend fun home() = homeResult
+
+        override suspend fun moreHome(token: String): Result<HomeFeed> {
+            moreHomeCalls++
+            return continuationResults[token] ?: Result.success(HomeFeed(emptyList(), null))
+        }
+
         override suspend fun explore() = Result.success(emptyList<HomeShelf>())
         override suspend fun history() = Result.success(emptyList<Song>())
         override suspend fun recents() = Result.success(emptyList<Song>())
@@ -148,6 +158,37 @@ class AndroidAutoRealCarFeedbackTest {
         )
     }
 
+    @Test
+    fun homeIncludesAdditionalMobileShelvesFromContinuation() = runBlocking {
+        val source = OnlineSource().apply {
+            homeResult = Result.success(
+                HomeFeed(
+                    shelves = listOf(shelf("Listen Again", "listen")),
+                    continuation = "next-home",
+                ),
+            )
+            continuationResults["next-home"] = Result.success(
+                HomeFeed(
+                    shelves = listOf(
+                        shelf("Made for You", "made"),
+                        shelf("Trending", "trending"),
+                        shelf("New Releases", "new"),
+                    ),
+                    continuation = null,
+                ),
+            )
+        }
+        val catalog = AndroidAutoCatalog(source)
+
+        val rows = catalog.children(AndroidAutoRoute.Home, 0, 20).getOrThrow()
+
+        assertEquals(
+            listOf("Listen Again", "Made for You", "Trending", "New Releases"),
+            rows.map { it.mediaMetadata.title.toString() },
+        )
+        assertEquals(1, source.moreHomeCalls)
+    }
+
     private companion object {
         fun song(id: String, artwork: String?) = Song(
             videoId = id,
@@ -155,6 +196,19 @@ class AndroidAutoRealCarFeedbackTest {
             artist = "Artist",
             thumbnailUrl = artwork,
             durationText = "3:30",
+        )
+
+        fun shelf(title: String, id: String) = HomeShelf(
+            title = title,
+            items = listOf(
+                ShelfItem(
+                    title = "Track $id",
+                    subtitle = "Artist",
+                    thumbnailUrl = "https://img.example/w120-h120/$id.jpg",
+                    videoId = id,
+                    browseId = null,
+                ),
+            ),
         )
     }
 }
