@@ -5,7 +5,7 @@ import org.junit.Test
 
 class TanTovIdentityTest {
     @Test
-    fun devBuildUsesPermanentTanTovApplicationId() {
-        assertEquals("com.tantov.music", BuildConfig.APPLICATION_ID)
+    fun carTestBuildUsesDedicatedTanTovApplicationId() {
+        assertEquals("com.tantov.music.cartest", BuildConfig.APPLICATION_ID)
     }
 }
