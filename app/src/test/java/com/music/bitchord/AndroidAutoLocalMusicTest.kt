@@ -32,6 +32,8 @@ class AndroidAutoLocalMusicTest {
         override suspend fun home() = Result.success(HomeFeed(emptyList(), null))
         override suspend fun explore() = Result.success(emptyList<HomeShelf>())
         override suspend fun history() = Result.success(emptyList<Song>())
+        override suspend fun recents() = Result.success(emptyList<Song>())
+        override suspend fun quickPicks(excludeSongIds: Set<String>) = Result.success(emptyList<Song>())
         override suspend fun library(): Result<LibraryPage> {
             libraryCalls++
             return Result.success(LibraryPage(emptyList(), emptyList(), emptyList()))

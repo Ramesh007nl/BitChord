@@ -27,6 +27,9 @@ class AndroidAutoCatalogTest {
         var homeResult: Result<HomeFeed> = Result.success(HomeFeed(emptyList(), null))
         var exploreResult: Result<List<HomeShelf>> = Result.success(emptyList())
         var historyResult: Result<List<Song>> = Result.success(emptyList())
+        var recentsResult: Result<List<Song>> = Result.success(emptyList())
+        var quickPicksResult: Result<List<Song>> = Result.success(emptyList())
+        var quickPicksExcludedIds: Set<String> = emptySet()
         var libraryResult: Result<LibraryPage> = Result.success(LibraryPage(emptyList(), emptyList(), emptyList()))
         val browsePages = mutableMapOf<String, Result<YtMusicRepository.SongPage>>()
         val artistPages = mutableMapOf<String, Result<ArtistPage>>()
@@ -34,6 +37,8 @@ class AndroidAutoCatalogTest {
         var signedIn: Boolean = true
         var homeCalls = 0
         var historyCalls = 0
+        var recentsCalls = 0
+        var quickPicksCalls = 0
         var libraryCalls = 0
         var browseCalls = 0
 
@@ -47,6 +52,17 @@ class AndroidAutoCatalogTest {
         override suspend fun history(): Result<List<Song>> {
             historyCalls++
             return historyResult
+        }
+
+        override suspend fun recents(): Result<List<Song>> {
+            recentsCalls++
+            return recentsResult
+        }
+
+        override suspend fun quickPicks(excludeSongIds: Set<String>): Result<List<Song>> {
+            quickPicksCalls++
+            quickPicksExcludedIds = excludeSongIds
+            return quickPicksResult
         }
 
         override suspend fun library(): Result<LibraryPage> {
@@ -77,6 +93,21 @@ class AndroidAutoCatalogTest {
         thumbnailUrl = null,
         durationText = "3:30",
     )
+
+    @Test
+    fun dataSourceContractExposesRecentsAndQuickPicks() = runBlocking {
+        val recent = song("recent-contract")
+        val pick = song("pick-contract")
+        val fake = FakeAutoDataSource().apply {
+            recentsResult = Result.success(listOf(recent))
+            quickPicksResult = Result.success(listOf(pick))
+        }
+        val source: AndroidAutoDataSource = fake
+
+        assertEquals(listOf(recent), source.recents().getOrThrow())
+        assertEquals(listOf(pick), source.quickPicks(setOf("excluded")).getOrThrow())
+        assertEquals(setOf("excluded"), fake.quickPicksExcludedIds)
+    }
 
     @Test
     fun rootHasExpectedOrderAndBrowsableFlags() = runBlocking {

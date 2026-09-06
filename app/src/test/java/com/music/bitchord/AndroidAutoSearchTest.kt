@@ -31,6 +31,8 @@ class AndroidAutoSearchTest {
         override suspend fun home() = Result.success(HomeFeed(emptyList(), null))
         override suspend fun explore() = Result.success(emptyList<HomeShelf>())
         override suspend fun history() = Result.success(emptyList<Song>())
+        override suspend fun recents() = Result.success(emptyList<Song>())
+        override suspend fun quickPicks(excludeSongIds: Set<String>) = Result.success(emptyList<Song>())
         override suspend fun library() = Result.success(LibraryPage(emptyList(), emptyList(), emptyList()))
         override suspend fun browseSongs(browseId: String): Result<YtMusicRepository.SongPage> =
             Result.failure(IllegalArgumentException("not used"))

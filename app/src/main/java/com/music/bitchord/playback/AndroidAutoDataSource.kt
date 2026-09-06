@@ -15,6 +15,8 @@ interface AndroidAutoDataSource {
     suspend fun home(): Result<HomeFeed>
     suspend fun explore(): Result<List<HomeShelf>>
     suspend fun history(): Result<List<Song>>
+    suspend fun recents(): Result<List<Song>>
+    suspend fun quickPicks(excludeSongIds: Set<String> = emptySet()): Result<List<Song>>
     suspend fun library(): Result<LibraryPage>
     suspend fun browseSongs(browseId: String): Result<YtMusicRepository.SongPage>
     suspend fun artistPage(browseId: String): Result<ArtistPage>
@@ -26,6 +28,8 @@ object YtMusicAndroidAutoDataSource : AndroidAutoDataSource {
     override suspend fun home() = YtMusicRepository.home()
     override suspend fun explore() = YtMusicRepository.explore()
     override suspend fun history() = YtMusicRepository.history()
+    override suspend fun recents() = YtMusicRepository.recents()
+    override suspend fun quickPicks(excludeSongIds: Set<String>) = YtMusicRepository.quickPicks(excludeSongIds)
     override suspend fun library() = YtMusicRepository.library()
     override suspend fun browseSongs(browseId: String) = YtMusicRepository.browseSongs(browseId)
     override suspend fun artistPage(browseId: String) = YtMusicRepository.artistPage(browseId)

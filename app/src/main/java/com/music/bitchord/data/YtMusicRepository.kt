@@ -19,6 +19,7 @@ import com.music.bitchord.data.model.SongMenu
 import com.music.bitchord.data.model.UserPlaylist
 import com.music.bitchord.data.settings.AppSettings
 import com.music.bitchord.data.sources.TrackMatcher
+import com.music.bitchord.playback.LastPlayed
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -88,8 +89,7 @@ object YtMusicRepository {
      * Signed-in only; there is no history to read as a guest.
      */
     private suspend fun recentlyPlayed(): HomeShelf? {
-        if (Innertube.cookie == null) return null
-        val songs = fetchHistory().take(RECENT_LIMIT)
+        val songs = recents().getOrDefault(emptyList()).take(RECENT_LIMIT)
         if (songs.isEmpty()) return null
         return HomeShelf(
             title = RECENT_TITLE,
@@ -127,6 +127,59 @@ object YtMusicRepository {
      * whereas this is the page you open when twenty is not enough.
      */
     suspend fun history(): Result<List<Song>> = call("history") { fetchHistory() }
+
+    /** Account history for Android Auto, with the last local queue as an offline/signed-out fallback. */
+    suspend fun recents(): Result<List<Song>> = call("recents") {
+        if (Innertube.cookie != null) {
+            val accountHistory = runCatching { fetchHistory() }.getOrDefault(emptyList())
+            if (accountHistory.isNotEmpty()) return@call accountHistory
+        }
+        runCatching { LastPlayed.load()?.songs.orEmpty() }
+            .getOrDefault(emptyList())
+            .distinctBy { it.videoId }
+    }
+
+    /** Recommended discovery tracks for Android Auto, excluding anything already in Recents. */
+    suspend fun quickPicks(excludeSongIds: Set<String> = emptySet()): Result<List<Song>> =
+        call("quickPicks") {
+            val homeRaw = runCatching { Innertube.browse("FEmusic_home") }.getOrNull()
+            val shelves = homeRaw?.let(InnertubeParser::parseHome).orEmpty()
+
+            fun HomeShelf.toSongs(): List<Song> = items.mapNotNull { item ->
+                item.videoId
+                    ?.takeUnless(excludeSongIds::contains)
+                    ?.let { id ->
+                        Song(
+                            videoId = id,
+                            title = item.title,
+                            artist = item.subtitle,
+                            thumbnailUrl = item.thumbnailUrl,
+                        )
+                    }
+            }
+
+            val namedShelf = shelves.firstOrNull { shelf ->
+                val title = shelf.title.lowercase(Locale.ROOT)
+                "quick" in title || "pick" in title || "mix" in title || "recommend" in title
+            }
+            namedShelf?.toSongs()
+                ?.distinctBy { it.videoId }
+                ?.takeIf { it.isNotEmpty() }
+                ?.let { return@call it }
+
+            val homeSongs = shelves
+                .filterNot { shelf ->
+                    val title = shelf.title.lowercase(Locale.ROOT)
+                    "recent" in title || "history" in title || "listen again" in title
+                }
+                .flatMap { it.toSongs() }
+                .distinctBy { it.videoId }
+            if (homeSongs.isNotEmpty()) return@call homeSongs
+
+            shelvesOf("FEmusic_new_releases")
+                .flatMap { it.toSongs() }
+                .distinctBy { it.videoId }
+        }
 
     private const val HISTORY = "FEmusic_history"
     private const val RECENT_TITLE = "Recently played"
