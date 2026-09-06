@@ -50,7 +50,8 @@ class AndroidAutoRealCarFeedbackTest {
         )
         override suspend fun browseSongs(browseId: String) =
             Result.success(YtMusicRepository.SongPage(emptyList(), null))
-        override suspend fun artistPage(browseId: String) = Result.success(ArtistPage("", null, emptyList(), emptyList()))
+        override suspend fun artistPage(browseId: String) =
+            Result.success(ArtistPage(emptyList(), null, emptyList()))
         override suspend fun search(query: String, filter: SearchFilter) = Result.success(emptyList<SearchResult>())
         override fun isSignedIn() = true
     }
