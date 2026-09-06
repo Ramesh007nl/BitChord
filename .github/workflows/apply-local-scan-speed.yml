@@ -1,0 +1,289 @@
+name: Apply Local Scan Speed Fix
+
+on:
+  push:
+    branches:
+      - integration/bitChord-android-auto-2026-09
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]' && !contains(github.event.head_commit.message, 'feat(local): speed selected-folder scanning')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: integration/bitChord-android-auto-2026-09
+
+      - name: Apply production scan fixes
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_exact(path: str, old: str, new: str):
+              p = Path(path)
+              text = p.read_text()
+              if old not in text:
+                  raise SystemExit(f"Expected block not found in {path}: {old[:160]!r}")
+              p.write_text(text.replace(old, new, 1))
+
+          local = "app/src/main/java/com/music/bitchord/data/LocalMediaRepository.kt"
+
+          replace_exact(
+              local,
+              '''    private const val TAG = "BitChord"
+
+    @Volatile
+    private var cachedCatalog: LocalMusicCatalog? = null
+''',
+              '''    private const val TAG = "BitChord"
+    private const val SAF_METADATA_CONCURRENCY = 4
+
+    private val catalogCache = SingleFlightCache<LocalMusicCatalog>()
+''',
+          )
+
+          old_block = '''    suspend fun refresh(context: Context): LocalMusicCatalog = withContext(Dispatchers.IO) {
+        val allMusicRows = if (
+            AppSettings.localAllMusicEnabled.value && hasStoragePermission(context)
+        ) {
+            scanMediaStore(context)
+        } else {
+            emptyList()
+        }
+
+        val selectedRows = AppSettings.localMusicTreeUris.value
+            .toList()
+            .sorted()
+            .flatMap { scanTree(context, it) }
+
+        LocalMusicCatalog.merge(allMusicRows, selectedRows).also { cachedCatalog = it }
+    }
+
+    suspend fun catalog(context: Context): LocalMusicCatalog =
+        cachedCatalog ?: refresh(context)
+
+    fun invalidate() {
+        cachedCatalog = null
+    }
+
+    /** Scan one persisted Storage Access Framework tree without broad file access. */
+    private fun scanTree(context: Context, treeUriString: String): List<LocalMusicTrack> {
+        val treeUri = runCatching { Uri.parse(treeUriString) }.getOrNull() ?: return emptyList()
+        val hasGrant = context.contentResolver.persistedUriPermissions.any {
+            it.uri == treeUri && it.isReadPermission
+        }
+        if (!hasGrant) return emptyList()
+
+        val root = runCatching { DocumentFile.fromTreeUri(context, treeUri) }
+            .getOrNull() ?: return emptyList()
+        if (!root.exists() || !root.isDirectory) return emptyList()
+
+        val rows = mutableListOf<LocalMusicTrack>()
+        val rootLabel = root.name?.takeIf { it.isNotBlank() } ?: "Selected folder"
+
+        fun visit(directory: DocumentFile, path: String) {
+            val children = runCatching { directory.listFiles().toList() }
+                .getOrElse {
+                    Log.w(TAG, "Cannot read selected music folder $path: ${it.message}")
+                    return
+                }
+            children.sortedBy { it.name.orEmpty().lowercase(Locale.ROOT) }.forEach { child ->
+                val name = child.name.orEmpty()
+                when {
+                    child.isDirectory -> {
+                        val nextLabel = name.ifBlank { "Folder" }
+                        visit(child, "$path/$nextLabel")
+                    }
+                    child.isFile && (
+                        child.type?.startsWith("audio/", ignoreCase = true) == true ||
+                            isAudioFileName(name)
+                    ) -> {
+                        val uri = child.uri.toString()
+                        val fileName = name.ifBlank { "Audio" }
+                        val song = buildSongFromUri(
+                            context = context,
+                            uriStr = uri,
+                            fileName = fileName,
+                        ).copy(localPath = "$path/$fileName")
+                        val documentId = runCatching {
+                            DocumentsContract.getDocumentId(child.uri)
+                        }.getOrNull()
+                        val sizeBytes = runCatching { child.length() }.getOrDefault(0L)
+
+                        rows += LocalMusicTrack(
+                            song = song,
+                            folderKey = path,
+                            folderLabel = path.substringAfterLast('/').ifBlank { rootLabel },
+                            identity = safStorageIdentity(
+                                documentId = documentId,
+                                uri = uri,
+                                sizeBytes = sizeBytes,
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+
+        runCatching { visit(root, rootLabel) }
+            .onFailure { Log.w(TAG, "Failed scanning selected music tree: ${it.message}") }
+        return rows
+    }
+'''
+
+          new_block = '''    private suspend fun loadCatalog(context: Context): LocalMusicCatalog = withContext(Dispatchers.IO) {
+        val allMusicRows = if (
+            AppSettings.localAllMusicEnabled.value && hasStoragePermission(context)
+        ) {
+            scanMediaStore(context)
+        } else {
+            emptyList()
+        }
+
+        val selectedRows = buildList {
+            AppSettings.localMusicTreeUris.value
+                .toList()
+                .sorted()
+                .forEach { treeUri -> addAll(scanTree(context, treeUri)) }
+        }
+
+        LocalMusicCatalog.merge(allMusicRows, selectedRows)
+    }
+
+    /** Manual rescan: serialize it with any car/phone catalog request and replace the cache. */
+    suspend fun refresh(context: Context): LocalMusicCatalog =
+        catalogCache.reload { loadCatalog(context) }
+
+    /**
+     * Phone UI and Android Auto can arrive together after launch. They now share
+     * one cold scan instead of independently walking the same selected folders.
+     */
+    suspend fun catalog(context: Context): LocalMusicCatalog =
+        catalogCache.getOrLoad { loadCatalog(context) }
+
+    fun invalidate() {
+        catalogCache.invalidate()
+    }
+
+    private data class SafAudioCandidate(
+        val uri: String,
+        val fileName: String,
+        val path: String,
+        val folderLabel: String,
+        val documentId: String?,
+        val sizeBytes: Long,
+    )
+
+    /**
+     * Scan one persisted Storage Access Framework tree without broad file access.
+     * Directory walking stays deterministic, while expensive tag reads run with
+     * bounded parallelism so a large selected folder does not block for one file
+     * at a time or overwhelm the phone with unbounded retrievers.
+     */
+    private suspend fun scanTree(context: Context, treeUriString: String): List<LocalMusicTrack> {
+        val treeUri = runCatching { Uri.parse(treeUriString) }.getOrNull() ?: return emptyList()
+        val hasGrant = context.contentResolver.persistedUriPermissions.any {
+            it.uri == treeUri && it.isReadPermission
+        }
+        if (!hasGrant) return emptyList()
+
+        val root = runCatching { DocumentFile.fromTreeUri(context, treeUri) }
+            .getOrNull() ?: return emptyList()
+        if (!root.exists() || !root.isDirectory) return emptyList()
+
+        val candidates = mutableListOf<SafAudioCandidate>()
+        val rootLabel = root.name?.takeIf { it.isNotBlank() } ?: "Selected folder"
+
+        fun visit(directory: DocumentFile, path: String) {
+            val children = runCatching { directory.listFiles().toList() }
+                .getOrElse {
+                    Log.w(TAG, "Cannot read selected music folder $path: ${it.message}")
+                    return
+                }
+            children.sortedBy { it.name.orEmpty().lowercase(Locale.ROOT) }.forEach { child ->
+                val name = child.name.orEmpty()
+                when {
+                    child.isDirectory -> {
+                        val nextLabel = name.ifBlank { "Folder" }
+                        visit(child, "$path/$nextLabel")
+                    }
+                    child.isFile && (
+                        child.type?.startsWith("audio/", ignoreCase = true) == true ||
+                            isAudioFileName(name)
+                    ) -> {
+                        val uri = child.uri.toString()
+                        val fileName = name.ifBlank { "Audio" }
+                        val documentId = runCatching {
+                            DocumentsContract.getDocumentId(child.uri)
+                        }.getOrNull()
+                        val sizeBytes = runCatching { child.length() }.getOrDefault(0L)
+                        candidates += SafAudioCandidate(
+                            uri = uri,
+                            fileName = fileName,
+                            path = path,
+                            folderLabel = path.substringAfterLast('/').ifBlank { rootLabel },
+                            documentId = documentId,
+                            sizeBytes = sizeBytes,
+                        )
+                    }
+                }
+            }
+        }
+
+        runCatching { visit(root, rootLabel) }
+            .onFailure { Log.w(TAG, "Failed scanning selected music tree: ${it.message}") }
+
+        return candidates.mapBoundedConcurrent(SAF_METADATA_CONCURRENCY) { candidate ->
+            val song = buildSongFromUri(
+                context = context,
+                uriStr = candidate.uri,
+                fileName = candidate.fileName,
+            ).copy(localPath = "${candidate.path}/${candidate.fileName}")
+
+            LocalMusicTrack(
+                song = song,
+                folderKey = candidate.path,
+                folderLabel = candidate.folderLabel,
+                identity = safStorageIdentity(
+                    documentId = candidate.documentId,
+                    uri = candidate.uri,
+                    sizeBytes = candidate.sizeBytes,
+                ),
+            )
+        }
+    }
+'''
+
+          replace_exact(local, old_block, new_block)
+
+          catalog = "app/src/main/java/com/music/bitchord/playback/AndroidAutoCatalog.kt"
+          replace_exact(
+              catalog,
+              '''                song.albumName?.let(::setAlbumTitle)
+                song.artworkAt(NOTIFICATION_ART_PX)?.toUri()?.let(::setArtworkUri)
+''',
+              '''                song.albumName?.let(::setAlbumTitle)
+                val artwork = song.artworkAt(NOTIFICATION_ART_PX)
+                    ?: if (song.localUri != null) resourceArtwork(R.drawable.ic_car_local_music) else null
+                artwork?.toUri()?.let(::setArtworkUri)
+''',
+          )
+          PY
+
+      - name: Commit speed fix
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/music/bitchord/data/LocalMediaRepository.kt \
+                  app/src/main/java/com/music/bitchord/playback/AndroidAutoCatalog.kt
+          git commit -m "feat(local): speed selected-folder scanning and add car artwork fallback"
+          git push origin HEAD:integration/bitChord-android-auto-2026-09
