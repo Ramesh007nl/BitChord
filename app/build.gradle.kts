@@ -85,8 +85,8 @@ android {
     productFlavors {
         create("dev") {
             dimension = "env"
-            applicationId = "com.tantov.music"
-            resValue("string", "app_name", "TanTov Music")
+            applicationId = "com.tantov.music.cartest"
+            resValue("string", "app_name", "TanTov Music Test")
         }
         create("prod") {
             dimension = "env"
