@@ -58,7 +58,7 @@ class AndroidAutoMediaLibraryTest {
         }.value
         assertNotNull(children)
         assertEquals(
-            listOf("Home", "Explore", "Recently Played", "Library"),
+            listOf("Home", "Recents", "Browse", "Library"),
             children!!.map { it.mediaMetadata.title.toString() },
         )
     }
