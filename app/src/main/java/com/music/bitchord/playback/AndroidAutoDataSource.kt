@@ -13,6 +13,10 @@ import com.music.bitchord.data.model.Song
 /** Small injectable seam between Android Auto browsing and YouTube Music network calls. */
 interface AndroidAutoDataSource {
     suspend fun home(): Result<HomeFeed>
+
+    /** Additional mobile Home shelves. Default keeps existing test/fake sources source-compatible. */
+    suspend fun moreHome(token: String): Result<HomeFeed> = Result.success(HomeFeed(emptyList(), null))
+
     suspend fun explore(): Result<List<HomeShelf>>
     suspend fun history(): Result<List<Song>>
     suspend fun recents(): Result<List<Song>>
@@ -26,6 +30,7 @@ interface AndroidAutoDataSource {
 
 object YtMusicAndroidAutoDataSource : AndroidAutoDataSource {
     override suspend fun home() = YtMusicRepository.home()
+    override suspend fun moreHome(token: String) = YtMusicRepository.moreHome(token)
     override suspend fun explore() = YtMusicRepository.explore()
     override suspend fun history() = YtMusicRepository.history()
     override suspend fun recents() = YtMusicRepository.recents()
