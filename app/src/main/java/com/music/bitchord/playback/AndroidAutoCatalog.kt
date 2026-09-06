@@ -39,6 +39,8 @@ class AndroidAutoCatalog(
     private var homeCache: CacheEntry<HomeFeed>? = null
     private var exploreCache: CacheEntry<List<HomeShelf>>? = null
     private var historyCache: CacheEntry<List<Song>>? = null
+    private var recentsCache: CacheEntry<List<Song>>? = null
+    private var quickPicksCache: CacheEntry<List<Song>>? = null
     private var libraryCache: CacheEntry<LibraryPage>? = null
     private val searchCache = mutableMapOf<String, CacheEntry<List<MediaItem>>>()
 
@@ -59,7 +61,7 @@ class AndroidAutoCatalog(
             AndroidAutoRoute.Root -> rootChildren()
             AndroidAutoRoute.Home -> homeShelves()
             AndroidAutoRoute.Explore -> exploreShelves()
-            AndroidAutoRoute.Recent -> if (dataSource.isSignedIn()) historyRows() else emptyList()
+            AndroidAutoRoute.Recent -> recents().map(::playableRow)
             AndroidAutoRoute.Library -> libraryFolders()
             AndroidAutoRoute.LocalMusic -> localMusicSections()
             is AndroidAutoRoute.LocalSection -> localSectionRows(route.section)
@@ -162,6 +164,8 @@ class AndroidAutoCatalog(
         homeCache = null
         exploreCache = null
         historyCache = null
+        recentsCache = null
+        quickPicksCache = null
         libraryCache = null
         searchCache.clear()
         allowedCollections.clear()
@@ -199,12 +203,50 @@ class AndroidAutoCatalog(
         return dataSource.history().getOrThrow().also { historyCache = CacheEntry(it, nowMs()) }
     }
 
+    private suspend fun recents(): List<Song> {
+        recentsCache?.takeIf { nowMs() - it.storedAt <= RECENTS_TTL_MS }?.let { return it.value }
+        return dataSource.recents().getOrThrow().also {
+            recentsCache = CacheEntry(it, nowMs())
+        }
+    }
+
+    private suspend fun quickPicks(): List<Song> {
+        quickPicksCache?.takeIf { nowMs() - it.storedAt <= QUICK_PICKS_TTL_MS }?.let { return it.value }
+        val excluded = recents().mapTo(HashSet()) { it.videoId }
+        return dataSource.quickPicks(excluded).getOrThrow()
+            .filterNot { it.videoId in excluded }
+            .distinctBy { it.videoId }
+            .also { quickPicksCache = CacheEntry(it, nowMs()) }
+    }
+
     private suspend fun library(): LibraryPage {
         libraryCache?.takeIf { nowMs() - it.storedAt <= AUTH_TTL_MS }?.let { return it.value }
         return dataSource.library().getOrThrow().also { libraryCache = CacheEntry(it, nowMs()) }
     }
 
-    private suspend fun homeShelves(): List<MediaItem> = homeFeed().shelves.mapIndexed { index, shelf ->
+    private suspend fun mergedHomeShelves(): List<HomeShelf> {
+        val base = homeFeed().shelves
+        val quickSongs = runCatching { quickPicks() }.getOrDefault(emptyList())
+        val syntheticQuick = quickSongs.takeIf { it.isNotEmpty() }?.let { songs ->
+            HomeShelf(
+                title = "Quick Picks",
+                items = songs.map { song ->
+                    ShelfItem(
+                        title = song.title,
+                        subtitle = song.artist,
+                        thumbnailUrl = song.thumbnailUrl,
+                        videoId = song.videoId,
+                        browseId = null,
+                    )
+                },
+            )
+        }
+        return listOfNotNull(syntheticQuick) + base.filterNot { shelf ->
+            shelf.title.equals("Quick Picks", ignoreCase = true)
+        }
+    }
+
+    private suspend fun homeShelves(): List<MediaItem> = mergedHomeShelves().mapIndexed { index, shelf ->
         browsable(
             AndroidAutoRoute.Shelf(AndroidAutoRoute.Shelf.Source.HOME, index, shelf.title),
             shelf.title,
@@ -325,7 +367,7 @@ class AndroidAutoCatalog(
 
     private suspend fun shelfRows(route: AndroidAutoRoute.Shelf): List<MediaItem> {
         val shelves = when (route.source) {
-            AndroidAutoRoute.Shelf.Source.HOME -> homeFeed().shelves
+            AndroidAutoRoute.Shelf.Source.HOME -> mergedHomeShelves()
             AndroidAutoRoute.Shelf.Source.EXPLORE -> exploreFeed()
             AndroidAutoRoute.Shelf.Source.ARTIST -> return emptyList()
         }
@@ -530,6 +572,8 @@ class AndroidAutoCatalog(
 
     companion object {
         private const val HOME_TTL_MS = 5 * 60_000L
+        private const val RECENTS_TTL_MS = 30_000L
+        private const val QUICK_PICKS_TTL_MS = 60_000L
         private const val AUTH_TTL_MS = 2 * 60_000L
         private const val SEARCH_TTL_MS = 60_000L
 

@@ -125,7 +125,7 @@ class AndroidAutoCatalogTest {
     @Test
     fun recentTrackResolvesBackToNormalBitChordPlayableItem() = runBlocking {
         val fake = FakeAutoDataSource().apply {
-            historyResult = Result.success(listOf(song("vid1", "Track")))
+            recentsResult = Result.success(listOf(song("vid1", "Track")))
         }
         val catalog = AndroidAutoCatalog(fake)
 
@@ -137,6 +137,80 @@ class AndroidAutoCatalogTest {
         assertFalse(playable.mediaId.startsWith("tantov:auto:"))
         assertEquals("Track", playable.mediaMetadata.title.toString())
         assertEquals("Artist", playable.mediaMetadata.artist.toString())
+    }
+
+    @Test
+    fun signedOutRecentUsesLocalRecentsFeed() = runBlocking {
+        val fake = FakeAutoDataSource().apply {
+            signedIn = false
+            recentsResult = Result.success(listOf(song("local-recent", "Local Recent")))
+        }
+        val catalog = AndroidAutoCatalog(fake)
+
+        val rows = catalog.children(AndroidAutoRoute.Recent, 0, 20).getOrThrow()
+
+        assertEquals(
+            listOf(AndroidAutoRoute.Track("local-recent")),
+            rows.mapNotNull { AndroidAutoMediaIds.parse(it.mediaId) },
+        )
+        assertEquals(1, fake.recentsCalls)
+        assertEquals(0, fake.historyCalls)
+    }
+
+    @Test
+    fun homePrependsQuickPicksAndExcludesRecentIds() = runBlocking {
+        val fake = FakeAutoDataSource().apply {
+            recentsResult = Result.success(listOf(song("recent")))
+            quickPicksResult = Result.success(listOf(song("recent"), song("fresh")))
+            homeResult = Result.success(
+                HomeFeed(
+                    shelves = listOf(
+                        HomeShelf(
+                            "Listen Again",
+                            listOf(ShelfItem("Recent", "Artist", null, "recent", null)),
+                        ),
+                    ),
+                    continuation = null,
+                ),
+            )
+        }
+        val catalog = AndroidAutoCatalog(fake)
+
+        val home = catalog.children(AndroidAutoRoute.Home, 0, 20).getOrThrow()
+
+        assertEquals("Quick Picks", home.first().mediaMetadata.title.toString())
+        assertEquals(setOf("recent"), fake.quickPicksExcludedIds)
+        val quickRoute = AndroidAutoMediaIds.parse(home.first().mediaId) as AndroidAutoRoute.Shelf
+        val quickRows = catalog.children(quickRoute, 0, 20).getOrThrow()
+        assertEquals(
+            listOf(AndroidAutoRoute.Track("fresh")),
+            quickRows.mapNotNull { AndroidAutoMediaIds.parse(it.mediaId) },
+        )
+    }
+
+    @Test
+    fun recentsAndQuickPicksUseIndependentShortTtls() = runBlocking {
+        var clock = 1_000L
+        val fake = FakeAutoDataSource().apply {
+            recentsResult = Result.success(listOf(song("r1")))
+            quickPicksResult = Result.success(listOf(song("q1")))
+        }
+        val catalog = AndroidAutoCatalog(fake, nowMs = { clock })
+
+        catalog.children(AndroidAutoRoute.Recent, 0, 20).getOrThrow()
+        catalog.children(AndroidAutoRoute.Home, 0, 20).getOrThrow()
+        catalog.children(AndroidAutoRoute.Recent, 0, 20).getOrThrow()
+        catalog.children(AndroidAutoRoute.Home, 0, 20).getOrThrow()
+        assertEquals(1, fake.recentsCalls)
+        assertEquals(1, fake.quickPicksCalls)
+
+        clock += 30_001L
+        catalog.children(AndroidAutoRoute.Recent, 0, 20).getOrThrow()
+        assertEquals(2, fake.recentsCalls)
+
+        clock += 30_000L
+        catalog.children(AndroidAutoRoute.Home, 0, 20).getOrThrow()
+        assertEquals(2, fake.quickPicksCalls)
     }
 
     @Test
@@ -218,9 +292,10 @@ class AndroidAutoCatalogTest {
     }
 
     @Test
-    fun signedOutAuthenticatedRoutesAreEmptyWithoutRepositoryCalls() = runBlocking {
+    fun signedOutLibraryStaysAuthGatedWhileRecentsUseTheirOwnFeed() = runBlocking {
         val fake = FakeAutoDataSource().apply {
             signedIn = false
+            recentsResult = Result.success(emptyList())
             historyResult = Result.failure(IOException("should not be called"))
             libraryResult = Result.failure(IOException("should not be called"))
         }
@@ -235,6 +310,7 @@ class AndroidAutoCatalogTest {
                 20,
             ).getOrThrow().isEmpty(),
         )
+        assertEquals(1, fake.recentsCalls)
         assertEquals(0, fake.historyCalls)
         assertEquals(0, fake.libraryCalls)
     }
