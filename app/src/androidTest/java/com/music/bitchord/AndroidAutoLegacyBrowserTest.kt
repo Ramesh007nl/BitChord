@@ -99,7 +99,7 @@ class AndroidAutoLegacyBrowserTest {
         assertNotNull("Expected a non-null legacy root id", rootId)
         assertEquals("tantov:auto:v1:root", rootId)
         assertEquals(
-            listOf("Home", "Explore", "Recently Played", "Library"),
+            listOf("Home", "Recents", "Browse", "Library"),
             childTitles,
         )
     }
