@@ -1,0 +1,171 @@
+name: Run Android Auto Upstream Integration
+
+on:
+  push:
+    branches: [integration/bitChord-android-auto-2026-09]
+    paths:
+      - 'tools/apply_android_auto_upstream_integration.py'
+      - '.github/workflows/run-android-auto-upstream-integration.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: integration/bitChord-android-auto-2026-09
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+      - run: chmod +x gradlew
+      - name: Configure task commits
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+      - name: Task 1 RED - data-source contract must fail before implementation
+        run: |
+          python tools/apply_android_auto_upstream_integration.py task1_tests
+          set +e
+          ./gradlew testDevDebugUnitTest \
+            --tests 'com.music.bitchord.AndroidAutoCatalogTest' \
+            --tests 'com.music.bitchord.AndroidAutoSearchTest' \
+            --tests 'com.music.bitchord.AndroidAutoVoiceSearchTest' \
+            --tests 'com.music.bitchord.AndroidAutoLocalMusicTest' 2>&1 | tee /tmp/task1-red.log
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo 'Task 1 red test unexpectedly passed.' >&2
+            exit 1
+          fi
+          grep -Eq "overrides nothing|Unresolved reference.*(recents|quickPicks)" /tmp/task1-red.log
+
+      - name: Task 1 GREEN - add Recents and Quick Picks APIs
+        run: |
+          python tools/apply_android_auto_upstream_integration.py task1_prod
+          ./gradlew testDevDebugUnitTest \
+            --tests 'com.music.bitchord.AndroidAutoCatalogTest' \
+            --tests 'com.music.bitchord.AndroidAutoSearchTest' \
+            --tests 'com.music.bitchord.AndroidAutoVoiceSearchTest' \
+            --tests 'com.music.bitchord.AndroidAutoLocalMusicTest'
+          git add app/src/main/java/com/music/bitchord/data/YtMusicRepository.kt \
+                  app/src/main/java/com/music/bitchord/playback/AndroidAutoDataSource.kt \
+                  app/src/test/java/com/music/bitchord/AndroidAutoCatalogTest.kt \
+                  app/src/test/java/com/music/bitchord/AndroidAutoSearchTest.kt \
+                  app/src/test/java/com/music/bitchord/AndroidAutoVoiceSearchTest.kt \
+                  app/src/test/java/com/music/bitchord/AndroidAutoLocalMusicTest.kt
+          git commit -m 'feat(auto): add recents and quick picks data APIs'
+          git push origin HEAD:integration/bitChord-android-auto-2026-09
+
+      - name: Task 2 RED - cache and synthetic shelf tests
+        run: |
+          python tools/apply_android_auto_upstream_integration.py task2_tests
+          set +e
+          ./gradlew testDevDebugUnitTest --tests 'com.music.bitchord.AndroidAutoCatalogTest' 2>&1 | tee /tmp/task2-red.log
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo 'Task 2 red tests unexpectedly passed.' >&2
+            exit 1
+          fi
+          grep -Eq "signedOutRecentUsesLocalRecentsFeed|homePrependsQuickPicksAndExcludesRecentIds|recentsAndQuickPicksUseIndependentShortTtls" /tmp/task2-red.log
+
+      - name: Task 2 GREEN - cache Recents and Quick Picks
+        run: |
+          python tools/apply_android_auto_upstream_integration.py task2_prod
+          ./gradlew testDevDebugUnitTest --tests 'com.music.bitchord.AndroidAutoCatalogTest'
+          git add app/src/main/java/com/music/bitchord/playback/AndroidAutoCatalog.kt \
+                  app/src/test/java/com/music/bitchord/AndroidAutoCatalogTest.kt
+          git commit -m 'feat(auto): cache recents and quick picks'
+          git push origin HEAD:integration/bitChord-android-auto-2026-09
+
+      - name: Task 3 - characterize TanTov dashboard ordering and failure isolation
+        run: |
+          python tools/apply_android_auto_upstream_integration.py task3_tests
+          ./gradlew testDevDebugUnitTest \
+            --tests 'com.music.bitchord.AndroidAutoDashboardSourceTest' \
+            --tests 'com.music.bitchord.AndroidAutoDashboardTest'
+          git add app/src/test/java/com/music/bitchord/AndroidAutoDashboardSourceTest.kt
+          git commit -m 'test(auto): preserve dashboard quick picks behavior'
+          git push origin HEAD:integration/bitChord-android-auto-2026-09
+
+      - name: Task 4 RED - browse-hint helper must not exist yet
+        run: |
+          python tools/apply_android_auto_upstream_integration.py task4_tests
+          set +e
+          ./gradlew testDevDebugUnitTest --tests 'com.music.bitchord.AndroidAutoBrowseHintsTest' 2>&1 | tee /tmp/task4-red.log
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo 'Task 4 red test unexpectedly passed.' >&2
+            exit 1
+          fi
+          grep -Eq "Unresolved reference.*AndroidAutoBrowseHints|AndroidAutoBrowseHints.*unresolved" /tmp/task4-red.log
+
+      - name: Task 4 GREEN - add Android Auto grid/list hints
+        run: |
+          python tools/apply_android_auto_upstream_integration.py task4_prod
+          ./gradlew testDevDebugUnitTest \
+            --tests 'com.music.bitchord.AndroidAutoBrowseHintsTest' \
+            --tests 'com.music.bitchord.AndroidAutoCatalogTest' \
+            --tests 'com.music.bitchord.AndroidAutoSearchTest'
+          git add app/src/main/java/com/music/bitchord/playback/AndroidAutoBrowseHints.kt \
+                  app/src/main/java/com/music/bitchord/playback/PlaybackService.kt \
+                  app/src/test/java/com/music/bitchord/AndroidAutoBrowseHintsTest.kt
+          git commit -m 'feat(auto): add Android Auto content style hints'
+          git push origin HEAD:integration/bitChord-android-auto-2026-09
+
+      - name: Task 5 - add Media3 and manifest smoke coverage
+        run: |
+          python tools/apply_android_auto_upstream_integration.py task5_tests
+          ./gradlew compileDevDebugAndroidTestKotlin
+          git add app/src/androidTest/java/com/music/bitchord/AndroidAutoMediaLibraryTest.kt \
+                  app/src/androidTest/java/com/music/bitchord/TanTovCarManifestTest.kt \
+                  .github/workflows/android-auto-legacy-smoke.yml
+          git commit -m 'test(auto): add Media3 Android Auto smoke coverage'
+          git push origin HEAD:integration/bitChord-android-auto-2026-09
+
+      - name: Task 6 - focused Android Auto regression suite
+        run: |
+          ./gradlew testDevDebugUnitTest \
+            --tests 'com.music.bitchord.AndroidAutoCatalogTest' \
+            --tests 'com.music.bitchord.AndroidAutoLocalMusicTest' \
+            --tests 'com.music.bitchord.AndroidAutoSearchTest' \
+            --tests 'com.music.bitchord.AndroidAutoVoiceSearchTest' \
+            --tests 'com.music.bitchord.AndroidAutoDashboardTest' \
+            --tests 'com.music.bitchord.AndroidAutoDashboardSourceTest' \
+            --tests 'com.music.bitchord.TanTovCarTemplateTest' \
+            --tests 'com.music.bitchord.AndroidAutoSessionCommandsTest' \
+            --tests 'com.music.bitchord.AndroidAutoRepeatCommandTest' \
+            --tests 'com.music.bitchord.AndroidAutoBrowseHintsTest'
+
+      - name: Task 6 - complete dev unit suite
+        run: ./gradlew testDevDebugUnitTest
+
+      - name: Task 7 - build integration APK
+        run: ./gradlew assembleDevDebug
+
+      - name: Upload integration APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: tantov-android-auto-integration
+          path: app/build/outputs/apk/dev/debug/app-dev-debug.apk
+
+      - name: Remove one-shot integration scaffolding
+        run: |
+          git rm tools/fix_tantov_robolectric_baseline.py \
+                 .github/workflows/fix-tantov-robolectric-baseline.yml \
+                 tools/apply_android_auto_upstream_integration.py \
+                 .github/workflows/run-android-auto-upstream-integration.yml
+          git commit -m 'chore(ci): remove one-shot Android Auto integration helpers'
+          git push origin HEAD:integration/bitChord-android-auto-2026-09
